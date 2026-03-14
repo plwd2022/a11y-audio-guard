@@ -85,6 +85,10 @@ private fun AudioGuardScreen() {
     var serviceRunning by remember { mutableStateOf(AudioGuardService.isRunning()) }
     var status by remember { mutableStateOf(GuardStatus.NO_HEADSET) }
     var fixLog by remember { mutableStateOf<List<FixEvent>>(emptyList()) }
+    var enhancedEnabled by remember { mutableStateOf(AudioGuardApp.isEnhancedModeEnabled(context)) }
+    var enhancedStateText by remember {
+        mutableStateOf(if (enhancedEnabled) "待启动" else "已关闭")
+    }
     var commDeviceName by remember { mutableStateOf("无") }
     var headsetName by remember { mutableStateOf("无") }
     var showAbout by remember { mutableStateOf(false) }
@@ -104,15 +108,18 @@ private fun AudioGuardScreen() {
 
     val refreshState: () -> Unit = {
         serviceRunning = AudioGuardService.isRunning()
+        enhancedEnabled = AudioGuardApp.isEnhancedModeEnabled(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
             status = monitor.getStatus()
             fixLog = monitor.fixLog
+            enhancedStateText = enhancedStateToText(monitor.getEnhancedState())
             commDeviceName = monitor.getCommunicationDevice()?.productName?.toString() ?: "无"
             headsetName = monitor.findConnectedHeadset()?.productName?.toString() ?: "未连接"
         } else {
             status = GuardStatus.NO_HEADSET
             fixLog = emptyList()
+            enhancedStateText = if (enhancedEnabled) "待启动" else "已关闭"
             commDeviceName = "无"
             headsetName = "未连接"
         }
@@ -141,6 +148,7 @@ private fun AudioGuardScreen() {
             override fun onRebind(monitor: AudioRouteMonitor) {
                 monitor.onStatusChanged = { _ -> refreshState() }
                 monitor.onFixLogUpdated = { refreshState() }
+                monitor.onEnhancedStateChanged = { refreshState() }
             }
         }
         val monitor = AudioGuardService.getMonitor()
@@ -150,6 +158,7 @@ private fun AudioGuardScreen() {
             AudioGuardService.removeRebindListener(listener)
             AudioGuardService.getMonitor()?.onStatusChanged = null
             AudioGuardService.getMonitor()?.onFixLogUpdated = null
+            AudioGuardService.getMonitor()?.onEnhancedStateChanged = null
         }
     }
 
@@ -228,6 +237,43 @@ private fun AudioGuardScreen() {
                 )
             }
 
+            val enhancedToggleDesc = if (enhancedEnabled) {
+                "增强守护，已开启"
+            } else {
+                "增强守护，已关闭"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = enhancedToggleDesc },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("增强守护（实验性）", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "更强地维持耳机通信路由，可能影响外放和通话音量行为",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = enhancedEnabled,
+                    onCheckedChange = { enabled ->
+                        enhancedEnabled = enabled
+                        AudioGuardApp.setEnhancedModeEnabled(context, enabled)
+                        AudioGuardService.getMonitor()?.setEnhancedModeEnabled(enabled)
+                        scope.launch {
+                            delay(300)
+                            refreshState()
+                        }
+                    }
+                )
+            }
+
             HorizontalDivider()
 
             val statusText = when (status) {
@@ -237,6 +283,7 @@ private fun AudioGuardScreen() {
                 GuardStatus.NO_HEADSET -> "无耳机"
             }
             Text("当前状态：$statusText", style = MaterialTheme.typography.bodyLarge)
+            Text("增强状态：$enhancedStateText", style = MaterialTheme.typography.bodyLarge)
             Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
             Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)
 
@@ -275,6 +322,16 @@ private fun AudioGuardScreen() {
             }
         }
             }
+    }
+}
+
+private fun enhancedStateToText(state: EnhancedState): String {
+    return when (state) {
+        EnhancedState.DISABLED -> "已关闭"
+        EnhancedState.WAITING_HEADSET -> "等待耳机"
+        EnhancedState.ACTIVE -> "增强中"
+        EnhancedState.CLEAR_PROBE -> "观察中"
+        EnhancedState.SUSPENDED_BY_CALL -> "通话暂停"
     }
 }
 

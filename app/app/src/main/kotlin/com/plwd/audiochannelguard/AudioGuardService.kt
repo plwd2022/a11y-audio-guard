@@ -58,8 +58,12 @@ class AudioGuardService : Service() {
         instance = this
 
         monitor = AudioRouteMonitor(this)
+        monitor.setEnhancedModeEnabled(AudioGuardApp.isEnhancedModeEnabled(this))
         monitor.onStatusChanged = { status ->
             updateNotification(status)
+        }
+        monitor.onEnhancedStateChanged = {
+            updateNotification(monitor.getStatus())
         }
 
         startForeground(NOTIFICATION_ID, buildNotification("声道守护运行中"))
@@ -87,7 +91,29 @@ class AudioGuardService : Service() {
     }
 
     private fun updateNotification(status: GuardStatus) {
-        val text = when (status) {
+        val text = when (monitor.getEnhancedState()) {
+            EnhancedState.CLEAR_PROBE -> "增强守护观察中"
+            EnhancedState.SUSPENDED_BY_CALL -> "增强守护已暂停（通话中）"
+            EnhancedState.WAITING_HEADSET ->
+                if (monitor.isEnhancedModeEnabled()) "增强守护等待耳机" else defaultStatusText(status)
+
+            EnhancedState.ACTIVE -> {
+                if (status == GuardStatus.FIXED) {
+                    val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
+                    "增强守护中，已恢复到 $deviceName"
+                } else {
+                    "增强守护中"
+                }
+            }
+
+            EnhancedState.DISABLED -> defaultStatusText(status)
+        }
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(NOTIFICATION_ID, buildNotification(text))
+    }
+
+    private fun defaultStatusText(status: GuardStatus): String {
+        return when (status) {
             GuardStatus.NORMAL -> "声道守护运行中"
             GuardStatus.FIXED -> {
                 val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
@@ -96,8 +122,6 @@ class AudioGuardService : Service() {
             GuardStatus.HIJACKED -> "检测到声道仍在内置设备"
             GuardStatus.NO_HEADSET -> "未检测到耳机"
         }
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
     }
 
     private fun buildNotification(text: String): Notification {
