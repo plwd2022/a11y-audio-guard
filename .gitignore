@@ -1,6 +1,11 @@
 # Logs with personal data
 *.log
 
+# Signing
+*.keystore
+*.jks
+*keystore*说明*
+
 # Gradle
 app/.gradle/
 app/build/

@@ -1,7 +1,9 @@
 package com.plwd.audiochannelguard
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -103,7 +105,6 @@ private fun AudioGuardScreen() {
         }
     }
 
-    // Auto-restart: if preference says enabled but service died
     LaunchedEffect(Unit) {
         if (AudioGuardApp.isGuardEnabled(context) && !AudioGuardService.isRunning()) {
             AudioGuardService.start(context)
@@ -143,7 +144,6 @@ private fun AudioGuardScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Service toggle
             val toggleDesc = if (serviceRunning) "启用守护，已开启" else "启用守护，已关闭"
             Row(
                 modifier = Modifier
@@ -152,10 +152,7 @@ private fun AudioGuardScreen() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "启用守护",
-                    style = MaterialTheme.typography.titleMedium
-                )
+                Text("启用守护", style = MaterialTheme.typography.titleMedium)
                 Switch(
                     checked = serviceRunning,
                     onCheckedChange = { enabled ->
@@ -175,62 +172,32 @@ private fun AudioGuardScreen() {
 
             HorizontalDivider()
 
-            // Status info
             val statusText = when (status) {
                 GuardStatus.NORMAL -> "正常"
                 GuardStatus.FIXED -> "已修复"
                 GuardStatus.NO_HEADSET -> "无耳机"
             }
+            Text("当前状态：$statusText", style = MaterialTheme.typography.bodyLarge)
+            Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
+            Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)
 
-            Text(
-                text = "当前状态：$statusText",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.semantics {
-                    contentDescription = "当前状态：$statusText"
-                }
-            )
-
-            Text(
-                text = "输出设备：$headsetName",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.semantics {
-                    contentDescription = "输出设备：$headsetName"
-                }
-            )
-
-            Text(
-                text = "通信设备：$commDeviceName",
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.semantics {
-                    contentDescription = "通信设备：$commDeviceName"
-                }
-            )
-
-            // Fix now button
             Button(
                 onClick = {
                     AudioGuardService.getMonitor()?.fixNow()
                     refreshState()
                 },
-                enabled = serviceRunning,
-                modifier = Modifier.semantics {
-                    contentDescription = "立即修复声道"
-                }
+                enabled = serviceRunning
             ) {
                 Text("立即修复")
             }
 
             HorizontalDivider()
 
-            // Fix log
-            Text(
-                text = "修复记录",
-                style = MaterialTheme.typography.titleMedium
-            )
+            Text("修复记录", style = MaterialTheme.typography.titleMedium)
 
             if (fixLog.isEmpty()) {
                 Text(
-                    text = "暂无记录",
+                    "暂无记录",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -243,25 +210,16 @@ private fun AudioGuardScreen() {
                 ) {
                     items(fixLog) { event ->
                         val time = timeFormat.format(Date(event.timestamp))
-                        Text(
-                            text = "$time ${event.message}",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.semantics {
-                                contentDescription = "$time ${event.message}"
-                            }
-                        )
+                        Text("$time ${event.message}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
 
             HorizontalDivider()
 
-            // About button
             OutlinedButton(
                 onClick = { showAbout = true },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics { contentDescription = "关于本软件" }
+                modifier = Modifier.fillMaxWidth()
             ) {
                 Text("关于本软件")
             }
@@ -271,28 +229,31 @@ private fun AudioGuardScreen() {
 
 @Composable
 private fun AboutDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                "关于本软件",
-                modifier = Modifier.semantics { contentDescription = "关于本软件" }
-            )
-        },
+        title = { Text("关于") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("功能说明", style = MaterialTheme.typography.titleSmall)
+                Text("问题背景", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "在 Android 14 及以上版本中，抖音、微信等应用播放语音消息时会调用 " +
-                    "setSpeakerphoneOn(true) 强制启用扬声器，但播放结束后未正确释放，" +
-                    "导致 TalkBack 等屏幕阅读器的语音输出也被劫持到扬声器，" +
-                    "使依赖耳机收听的视障用户受到严重影响。\n\n" +
-                    "本应用通过监听系统通信设备变化，在检测到音频被异常路由到扬声器时，" +
-                    "自动调用 setCommunicationDevice() 将音频恢复到已连接的耳机设备" +
-                    "（支持 USB、有线、蓝牙、BLE 耳机）。"
+                    "Android 14 起，系统以 setCommunicationDevice() 取代了旧的 " +
+                    "setSpeakerphoneOn() 来管理通信音频路由。但抖音、微信等应用在播放语音消息时" +
+                    "仍调用 setSpeakerphoneOn(true)，播放结束后未释放，" +
+                    "导致通信音频流被锁定在内置扬声器。TalkBack 等屏幕阅读器的语音输出因此被劫持，" +
+                    "严重影响依赖耳机的视障用户。"
+                )
+
+                Text("工作原理", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "通过 OnCommunicationDeviceChangedListener 实时监听通信设备变更，" +
+                    "当检测到通信设备被异常切换至内置扬声器且有耳机连接时，" +
+                    "自动调用 setCommunicationDevice() 将音频路由恢复至耳机。\n\n" +
+                    "支持设备类型：USB 耳机、有线耳机/耳麦、蓝牙 A2DP、BLE 音频设备。"
                 )
 
                 HorizontalDivider()
@@ -300,23 +261,41 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 Text("制作信息", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "本软件由平行世界plwd与AI编程软件共同制作\n" +
-                    "测试设备：Redmi K80 至尊版 (redmik80u)\n" +
-                    "如有任何问题，随时交流"
+                    "测试设备：Redmi K80 至尊版"
+                )
+
+                Text("开源协议", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "本项目基于 MIT License 开源。" +
+                    "您可以自由使用、复制、修改和分发，仅需保留版权声明。\n" +
+                    "本安装包已启用签名校验，未经授权的修改将无法运行。"
                 )
 
                 HorizontalDivider()
 
-                Text("使用条款", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "禁止修改本安装包到处宣发。\n" +
-                    "可以基于本项目开源的相关技术实现继续研究和分发。"
-                )
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(Intent(Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/plwd2022/a11y-audio-guard")))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("GitHub 开源仓库")
+                }
+
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(Intent(Intent.ACTION_VIEW,
+                            Uri.parse("https://qun.qq.com/universal-share/share?ac=1&authKey=sdEDI3L1gxwftS%2Faw0L%2FSZLavRZ0bNvqtz3UXYzNgRSSXgK%2FKNJZAYRxHmGKp2Pi&busi_data=eyJncm91cENvZGUiOiIxMDMxNTY2MzEwIiwidG9rZW4iOiI3OCtzMnlrbld6K3V0WUZocVdmTjRhZnFxR3J2bk1ybkJvMEFaQ3RjN1lINXo1azA0U01MSFhyaFhhVE1MS0FPIiwidWluIjoiMjg0MTkwNTI2NSJ9&data=vC3VZm0hSM3jcAOYSLpTZLieWHPLyHSNFnv90CtY_Z4je4_eE3XfSiYiz0bYXfzMQuTyRjIRLhgyfCQptV-ARg&svctype=4&tempid=h5_group_info")))
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("加入交流群")
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
-            }
+            TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
 }

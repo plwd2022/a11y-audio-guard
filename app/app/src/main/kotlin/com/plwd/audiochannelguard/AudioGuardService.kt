@@ -36,6 +36,10 @@ class AudioGuardService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        if (AudioGuardApp.isTampered) {
+            stopSelf()
+            return
+        }
         instance = this
 
         monitor = AudioRouteMonitor(this)

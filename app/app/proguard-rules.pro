@@ -1,8 +1,4 @@
-# Compose
--dontwarn androidx.compose.**
--keep class androidx.compose.** { *; }
-
-# Keep our app classes that are referenced from manifest
+# Manifest components
 -keep class com.plwd.audiochannelguard.AudioGuardApp
 -keep class com.plwd.audiochannelguard.MainActivity
 -keep class com.plwd.audiochannelguard.AudioGuardService
