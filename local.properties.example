@@ -1,0 +1,9 @@
+# 本地配置文件示例
+# 复制此文件为 local.properties 并填入真实值
+# local.properties 已被 .gitignore 忽略，不会提交到 git
+
+# 签名配置
+SIGNING_STORE_FILE=../plwd_cn.keystore
+SIGNING_STORE_PASSWORD=your_keystore_password
+SIGNING_KEY_ALIAS=your_key_alias
+SIGNING_KEY_PASSWORD=your_key_password

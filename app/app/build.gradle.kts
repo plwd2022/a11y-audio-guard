@@ -1,6 +1,22 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Load signing config from local.properties if exists
+val localProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) {
+        load(localFile.inputStream())
+    }
+}
+
+fun getSigningConfig(key: String, envVar: String, defaultValue: String): String {
+    return System.getenv(envVar)
+        ?: localProperties.getProperty(key)
+        ?: defaultValue
 }
 
 android {
@@ -17,10 +33,11 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(System.getenv("SIGNING_STORE_FILE") ?: "${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: "android"
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: "androiddebugkey"
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: "android"
+            val storeFilePath = getSigningConfig("SIGNING_STORE_FILE", "SIGNING_STORE_FILE", "${System.getProperty("user.home")}/.android/debug.keystore")
+            storeFile = file(storeFilePath)
+            storePassword = getSigningConfig("SIGNING_STORE_PASSWORD", "SIGNING_STORE_PASSWORD", "android")
+            keyAlias = getSigningConfig("SIGNING_KEY_ALIAS", "SIGNING_KEY_ALIAS", "androiddebugkey")
+            keyPassword = getSigningConfig("SIGNING_KEY_PASSWORD", "SIGNING_KEY_PASSWORD", "android")
         }
     }
 
