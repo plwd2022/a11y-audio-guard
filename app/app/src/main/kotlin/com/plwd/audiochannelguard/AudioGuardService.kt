@@ -16,10 +16,19 @@ class AudioGuardService : Service() {
         const val NOTIFICATION_ID = 1
 
         private var instance: AudioGuardService? = null
+        private val rebindListeners = mutableListOf<OnServiceRebindListener>()
 
         fun isRunning(): Boolean = instance != null
 
         fun getMonitor(): AudioRouteMonitor? = instance?.monitor
+
+        fun addRebindListener(listener: OnServiceRebindListener) {
+            rebindListeners.add(listener)
+        }
+
+        fun removeRebindListener(listener: OnServiceRebindListener) {
+            rebindListeners.remove(listener)
+        }
 
         fun start(context: Context) {
             context.startForegroundService(
@@ -30,6 +39,10 @@ class AudioGuardService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, AudioGuardService::class.java))
         }
+    }
+
+    interface OnServiceRebindListener {
+        fun onRebind(monitor: AudioRouteMonitor)
     }
 
     private lateinit var monitor: AudioRouteMonitor
@@ -50,6 +63,7 @@ class AudioGuardService : Service() {
 
         startForeground(NOTIFICATION_ID, buildNotification("声道守护运行中"))
         monitor.start()
+        rebindListeners.forEach { it.onRebind(monitor) }
     }
 
     override fun onDestroy() {

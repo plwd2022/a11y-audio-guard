@@ -113,14 +113,21 @@ private fun AudioGuardScreen() {
         }
     }
 
-    DisposableEffect(serviceRunning) {
+    DisposableEffect(Unit) {
         refreshState()
+        val listener = object : AudioGuardService.OnServiceRebindListener {
+            override fun onRebind(monitor: AudioRouteMonitor) {
+                monitor.onStatusChanged = { _ -> refreshState() }
+                monitor.onFixLogUpdated = { refreshState() }
+            }
+        }
         val monitor = AudioGuardService.getMonitor()
-        monitor?.onStatusChanged = { _ -> refreshState() }
-        monitor?.onFixLogUpdated = { refreshState() }
+        monitor?.let { listener.onRebind(it) }
+        AudioGuardService.addRebindListener(listener)
         onDispose {
-            monitor?.onStatusChanged = null
-            monitor?.onFixLogUpdated = null
+            AudioGuardService.removeRebindListener(listener)
+            AudioGuardService.getMonitor()?.onStatusChanged = null
+            AudioGuardService.getMonitor()?.onFixLogUpdated = null
         }
     }
 

@@ -15,7 +15,7 @@ class AudioFixTile : TileService() {
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
             monitor.fixNow()
-        } else {
+        } else if (AudioGuardApp.isGuardEnabled(this)) {
             AudioGuardService.start(this)
         }
         updateTile()
