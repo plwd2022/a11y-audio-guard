@@ -17,10 +17,10 @@ android {
 
     signingConfigs {
         create("release") {
-            storeFile = file(System.getenv("SIGNING_STORE_FILE") ?: "dummy.keystore")
-            storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: ""
-            keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
-            keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: ""
+            storeFile = file(System.getenv("SIGNING_STORE_FILE") ?: "${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: "android"
+            keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: "androiddebugkey"
+            keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: "android"
         }
     }
 
