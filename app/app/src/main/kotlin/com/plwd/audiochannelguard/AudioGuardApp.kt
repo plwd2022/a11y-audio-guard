@@ -39,7 +39,9 @@ class AudioGuardApp : Application() {
             isTampered = true
             Toast.makeText(this, "签名校验失败，应用可能被篡改", Toast.LENGTH_LONG).show()
         }
-        ServiceGuard.schedulePeriodicCheck(this)
+        if (isGuardEnabled(this)) {
+            ServiceGuard.schedulePeriodicCheck(this)
+        }
     }
 
     private fun verifySignature(): Boolean {

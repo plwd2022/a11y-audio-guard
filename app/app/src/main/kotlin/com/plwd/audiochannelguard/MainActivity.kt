@@ -156,9 +156,11 @@ private fun AudioGuardScreen() {
                 Switch(
                     checked = serviceRunning,
                     onCheckedChange = { enabled ->
+                        serviceRunning = enabled
                         AudioGuardApp.setGuardEnabled(context, enabled)
                         if (enabled) {
                             AudioGuardService.start(context)
+                            ServiceGuard.schedulePeriodicCheck(context)
                         } else {
                             AudioGuardService.stop(context)
                         }

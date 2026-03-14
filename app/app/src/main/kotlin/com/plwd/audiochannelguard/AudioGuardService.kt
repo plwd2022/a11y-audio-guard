@@ -37,6 +37,7 @@ class AudioGuardService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (AudioGuardApp.isTampered) {
+            AudioGuardApp.setGuardEnabled(this, false)
             stopSelf()
             return
         }
@@ -52,7 +53,7 @@ class AudioGuardService : Service() {
     }
 
     override fun onDestroy() {
-        monitor.stop()
+        if (::monitor.isInitialized) monitor.stop()
         instance = null
         super.onDestroy()
     }
