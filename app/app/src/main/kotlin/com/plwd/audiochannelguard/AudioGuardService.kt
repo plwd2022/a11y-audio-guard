@@ -53,6 +53,13 @@ class AudioGuardService : Service() {
         super.onDestroy()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (AudioGuardApp.isGuardEnabled(this)) {
+            ServiceGuard.enqueueRestart(this)
+        }
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
