@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -92,6 +90,7 @@ private fun AudioGuardScreen() {
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
+    var showFixLogDialog by remember { mutableStateOf(false) }
     val activity = context as? ComponentActivity
 
     // 检查是否需要显示权限引导
@@ -159,6 +158,14 @@ private fun AudioGuardScreen() {
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
     }
+
+    if (showFixLogDialog) {
+        FixLogDialog(
+            fixLog = fixLog,
+            timeFormat = timeFormat,
+            onDismiss = { showFixLogDialog = false }
+        )
+    }
     
     if (showPermissionGuide) {
         PermissionGuideDialog(
@@ -188,7 +195,8 @@ private fun AudioGuardScreen() {
             
             Column(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .weight(1f)
+                    .fillMaxWidth()
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
@@ -244,30 +252,13 @@ private fun AudioGuardScreen() {
 
             HorizontalDivider()
 
-            Text("修复记录", style = MaterialTheme.typography.titleMedium)
-
-            if (fixLog.isEmpty()) {
-                Text(
-                    "暂无记录",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    items(fixLog) { event ->
-                        val time = timeFormat.format(Date(event.timestamp))
-                        Text("$time ${event.message}", style = MaterialTheme.typography.bodySmall)
-                    }
-                }
+            OutlinedButton(
+                onClick = { showFixLogDialog = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("查看日志")
             }
 
-            HorizontalDivider()
-            
             // 权限设置按钮
             OutlinedButton(
                 onClick = { showPermissionGuide = true },
@@ -351,6 +342,40 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text("加入交流群")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
+@Composable
+private fun FixLogDialog(
+    fixLog: List<FixEvent>,
+    timeFormat: SimpleDateFormat,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("修复记录") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (fixLog.isEmpty()) {
+                    Text(
+                        "暂无记录",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    for (event in fixLog) {
+                        val time = timeFormat.format(Date(event.timestamp))
+                        Text("$time ${event.message}", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         },
