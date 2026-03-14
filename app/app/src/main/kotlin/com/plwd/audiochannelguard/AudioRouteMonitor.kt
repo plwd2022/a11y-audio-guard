@@ -32,6 +32,11 @@ class AudioRouteMonitor(private val context: Context) {
             AudioDeviceInfo.TYPE_BLE_HEADSET,       // 26
             AudioDeviceInfo.TYPE_BLE_SPEAKER,       // 27
         )
+
+        private val BUILTIN_TYPES = setOf(
+            AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+            AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
+        )
     }
 
     private val audioManager =
@@ -47,11 +52,11 @@ class AudioRouteMonitor(private val context: Context) {
 
     private val commDeviceListener =
         AudioManager.OnCommunicationDeviceChangedListener { device ->
-            Log.d(TAG, "Communication device changed: type=${device?.type} name=${device?.productName}")
-            if (device?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+            Log.i(TAG, "Communication device changed: type=${device?.type} name=${device?.productName}")
+            if (device?.type in BUILTIN_TYPES) {
                 val headset = findConnectedHeadset()
                 if (headset != null) {
-                    addLog("检测到声道被劫持到扬声器")
+                    addLog("检测到声道被劫持到${if (device?.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) "听筒" else "扬声器"}")
                     audioManager.setCommunicationDevice(headset)
                     addLog("已将声道恢复到 ${headset.productName}")
                     onStatusChanged?.invoke(GuardStatus.FIXED)
@@ -65,7 +70,7 @@ class AudioRouteMonitor(private val context: Context) {
             if (headset != null) {
                 addLog("耳机已连接: ${headset.productName}")
                 val commDevice = audioManager.communicationDevice
-                if (commDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+                if (commDevice?.type in BUILTIN_TYPES) {
                     audioManager.setCommunicationDevice(headset)
                     addLog("已将声道恢复到 ${headset.productName}")
                     onStatusChanged?.invoke(GuardStatus.FIXED)
@@ -124,7 +129,7 @@ class AudioRouteMonitor(private val context: Context) {
         val headset = findConnectedHeadset()
         if (headset == null) return GuardStatus.NO_HEADSET
         val commDevice = audioManager.communicationDevice
-        return if (commDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) {
+        return if (commDevice?.type in BUILTIN_TYPES) {
             GuardStatus.FIXED
         } else {
             GuardStatus.NORMAL
@@ -141,7 +146,7 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun addLog(message: String) {
-        Log.d(TAG, message)
+        Log.i(TAG, message)
         _fixLog.add(0, FixEvent(System.currentTimeMillis(), message))
         if (_fixLog.size > 50) _fixLog.removeAt(_fixLog.lastIndex)
         onFixLogUpdated?.invoke()
