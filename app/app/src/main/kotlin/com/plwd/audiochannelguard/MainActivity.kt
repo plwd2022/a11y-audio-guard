@@ -45,6 +45,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -74,14 +76,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    
-    override fun onResume() {
-        super.onResume()
-        // 每次回到前台时刷新权限状态
-        (this as? ComponentActivity)?.let { activity ->
-            // 触发重组以更新权限状态显示
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,10 +91,13 @@ private fun AudioGuardScreen() {
     var headsetName by remember { mutableStateOf("无") }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
-    
+    var showPermissionWarning by remember { mutableStateOf(false) }
+    val activity = context as? ComponentActivity
+
     // 检查是否需要显示权限引导
     LaunchedEffect(Unit) {
         val batteryStatus = PermissionChecker.checkBatteryOptimization(context)
+        showPermissionWarning = !batteryStatus.isGranted
         if (!batteryStatus.isGranted) {
             showPermissionGuide = true
         }
@@ -119,6 +116,23 @@ private fun AudioGuardScreen() {
             fixLog = emptyList()
             commDeviceName = "无"
             headsetName = "未连接"
+        }
+    }
+
+    DisposableEffect(activity) {
+        if (activity == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    showPermissionWarning = !PermissionChecker.checkBatteryOptimization(context).isGranted
+                    refreshState()
+                }
+            }
+            activity.lifecycle.addObserver(observer)
+            onDispose {
+                activity.lifecycle.removeObserver(observer)
+            }
         }
     }
 
@@ -167,7 +181,10 @@ private fun AudioGuardScreen() {
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 权限警告条
-            PermissionWarningBar(onClick = { showPermissionGuide = true })
+            PermissionWarningBar(
+                showWarning = showPermissionWarning,
+                onClick = { showPermissionGuide = true }
+            )
             
             Column(
                 modifier = Modifier

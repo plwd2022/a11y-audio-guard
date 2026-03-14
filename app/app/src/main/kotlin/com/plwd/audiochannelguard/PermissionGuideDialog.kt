@@ -1,6 +1,7 @@
 package com.plwd.audiochannelguard
 
 import android.content.Intent
+import androidx.activity.ComponentActivity
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -18,6 +19,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 
 /**
  * 权限引导对话框
@@ -28,18 +31,39 @@ fun PermissionGuideDialog(
     onAllPermissionsGranted: () -> Unit = {}
 ) {
     val context = LocalContext.current
-    var permissionStatus by remember { 
-        mutableStateOf(PermissionChecker.checkAllPermissions(context)) 
+    val activity = context as? ComponentActivity
+    var permissionStatus by remember {
+        mutableStateOf(PermissionChecker.checkAllPermissions(context))
     }
     var showManufacturerGuide by remember { mutableStateOf(false) }
-    
-    // 检查是否所有关键权限都已授予
-    val allCriticalGranted = permissionStatus
-        .filter { it.type == PermissionType.BATTERY_OPTIMIZATION || it.type == PermissionType.NOTIFICATION }
-        .all { it.isGranted }
-    
-    if (allCriticalGranted) {
-        onAllPermissionsGranted()
+
+    fun allCriticalGranted(statusList: List<PermissionStatus>): Boolean {
+        return statusList
+            .filter {
+                it.type == PermissionType.BATTERY_OPTIMIZATION ||
+                    it.type == PermissionType.NOTIFICATION
+            }
+            .all { it.isGranted }
+    }
+
+    DisposableEffect(activity, context) {
+        if (activity == null) {
+            onDispose { }
+        } else {
+            val observer = LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_RESUME) {
+                    val latestStatus = PermissionChecker.checkAllPermissions(context)
+                    permissionStatus = latestStatus
+                    if (allCriticalGranted(latestStatus)) {
+                        onAllPermissionsGranted()
+                    }
+                }
+            }
+            activity.lifecycle.addObserver(observer)
+            onDispose {
+                activity.lifecycle.removeObserver(observer)
+            }
+        }
     }
     
     Dialog(
@@ -153,7 +177,11 @@ fun PermissionGuideDialog(
                     Button(
                         onClick = {
                             // 刷新权限状态
-                            permissionStatus = PermissionChecker.checkAllPermissions(context)
+                            val latestStatus = PermissionChecker.checkAllPermissions(context)
+                            permissionStatus = latestStatus
+                            if (allCriticalGranted(latestStatus)) {
+                                onAllPermissionsGranted()
+                            }
                         }
                     ) {
                         Text("刷新状态")
@@ -243,17 +271,9 @@ private fun PermissionItem(
  */
 @Composable
 fun PermissionWarningBar(
+    showWarning: Boolean,
     onClick: () -> Unit
 ) {
-    val context = LocalContext.current
-    var showWarning by remember { mutableStateOf(false) }
-    
-    // 检查关键权限
-    LaunchedEffect(Unit) {
-        val batteryStatus = PermissionChecker.checkBatteryOptimization(context)
-        showWarning = !batteryStatus.isGranted
-    }
-    
     if (showWarning) {
         Surface(
             modifier = Modifier
