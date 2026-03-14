@@ -37,6 +37,7 @@ class AudioRouteMonitor(private val context: Context) {
         private val COMMUNICATION_HEADSET_TYPES = setOf(
             AudioDeviceInfo.TYPE_WIRED_HEADSET,
             AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+            AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,    // Some BT devices report as A2DP in comm devices
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_BLE_HEADSET,
