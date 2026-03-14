@@ -52,6 +52,25 @@ class AudioRouteMonitor(private val context: Context) {
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val handler = Handler(Looper.getMainLooper())
     private var running = false
+    
+    // Polling runnable for background detection when callbacks are delayed
+    private val pollingRunnable = object : Runnable {
+        override fun run() {
+            if (!running) return
+            val commDevice = audioManager.communicationDevice
+            if (commDevice?.type in BUILTIN_TYPES) {
+                val headset = findConnectedHeadset()
+                if (headset != null) {
+                    restoreCommunicationToHeadset(
+                        preferredOutputDevice = headset,
+                        reason = "轮询检测到声道被劫持到${builtinDeviceName(commDevice?.type)}"
+                    )
+                }
+            }
+            // Poll every 500ms when running
+            handler.postDelayed(this, 500)
+        }
+    }
 
     private val _fixLog = mutableListOf<FixEvent>()
     val fixLog: List<FixEvent> get() = _fixLog.toList()
@@ -106,10 +125,15 @@ class AudioRouteMonitor(private val context: Context) {
     fun start() {
         if (running) return
         running = true
+        // Use a dedicated handler thread instead of mainExecutor to avoid
+        // delayed callbacks when the app is in background
+        val callbackHandler = Handler(handler.looper)
         audioManager.addOnCommunicationDeviceChangedListener(
-            context.mainExecutor, commDeviceListener
+            { callbackHandler.post(it) }, commDeviceListener
         )
         audioManager.registerAudioDeviceCallback(deviceCallback, handler)
+        // Start polling for immediate detection in background
+        handler.post(pollingRunnable)
         addLog("守护已启动")
         val headset = findConnectedHeadset()
         if (headset == null) {
@@ -127,6 +151,7 @@ class AudioRouteMonitor(private val context: Context) {
     fun stop() {
         if (!running) return
         running = false
+        handler.removeCallbacks(pollingRunnable)
         audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         clearCommunicationDeviceSafely()
