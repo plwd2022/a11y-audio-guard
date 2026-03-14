@@ -1,0 +1,16 @@
+# Logs with personal data
+*.log
+
+# Gradle
+app/.gradle/
+app/build/
+app/app/build/
+app/local.properties
+
+# IDE
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
