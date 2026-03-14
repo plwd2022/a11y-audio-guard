@@ -22,6 +22,11 @@ enum class GuardStatus {
 
 class AudioRouteMonitor(private val context: Context) {
 
+    private enum class PollingMode {
+        IDLE,
+        RECOVERY_WINDOW,
+    }
+
     companion object {
         private const val TAG = "AudioRouteMonitor"
 
@@ -49,29 +54,66 @@ class AudioRouteMonitor(private val context: Context) {
             AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
             AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
         )
+
+        private const val RECOVERY_POLL_MS = 500L
+        private const val RECOVERY_WINDOW_MS = 6000L
+        private const val REQUIRED_STABLE_HITS = 3
     }
 
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val handler = Handler(Looper.getMainLooper())
     private var running = false
-    
-    // Polling runnable for background detection when callbacks are delayed
-    private val pollingRunnable = object : Runnable {
+
+    private var pollingMode = PollingMode.IDLE
+    private var recoveryDeadlineMs = 0L
+    private var stableHitCount = 0
+
+    private val recoveryPollingRunnable = object : Runnable {
         override fun run() {
             if (!running) return
+
+            if (pollingMode != PollingMode.RECOVERY_WINDOW) return
+
+            if (System.currentTimeMillis() >= recoveryDeadlineMs) {
+                stopRecoveryWindow("恢复观察窗口超时")
+                return
+            }
+
+            val headset = findConnectedHeadset()
+            if (headset == null) {
+                stopRecoveryWindow("恢复观察窗口内未检测到耳机")
+                onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+                return
+            }
+
             val commDevice = audioManager.communicationDevice
             if (commDevice?.type in BUILTIN_TYPES) {
-                val headset = findConnectedHeadset()
-                if (headset != null) {
-                    restoreCommunicationToHeadset(
-                        preferredOutputDevice = headset,
-                        reason = "轮询检测到声道被劫持到${builtinDeviceName(commDevice?.type)}"
-                    )
-                }
+                stableHitCount = 0
+                restoreCommunicationToHeadset(
+                    preferredOutputDevice = headset,
+                    reason = "恢复观察窗口检测到声道再次被劫持到${builtinDeviceName(commDevice?.type)}"
+                )
+                handler.postDelayed(this, RECOVERY_POLL_MS)
+                return
             }
-            // Poll every 500ms when running
-            handler.postDelayed(this, 500)
+
+            val communicationHeadset = findAvailableCommunicationHeadset(headset)
+            val isStable =
+                commDevice != null && communicationHeadset != null && isSamePhysicalDevice(commDevice, communicationHeadset)
+
+            if (isStable) {
+                stableHitCount++
+                if (stableHitCount >= REQUIRED_STABLE_HITS) {
+                    stopRecoveryWindow("路由已连续稳定 $REQUIRED_STABLE_HITS 次")
+                    onStatusChanged?.invoke(GuardStatus.NORMAL)
+                    return
+                }
+            } else {
+                stableHitCount = 0
+            }
+
+            handler.postDelayed(this, RECOVERY_POLL_MS)
         }
     }
 
@@ -91,6 +133,7 @@ class AudioRouteMonitor(private val context: Context) {
                         preferredOutputDevice = headset,
                         reason = "检测到声道被劫持到${builtinDeviceName(device?.type)}"
                     )
+                    startRecoveryWindow("回调检测到路由劫持")
                 }
             } else if (findConnectedHeadset() != null) {
                 onStatusChanged?.invoke(GuardStatus.NORMAL)
@@ -108,7 +151,9 @@ class AudioRouteMonitor(private val context: Context) {
                         preferredOutputDevice = headset,
                         reason = "检测到耳机接入，尝试恢复声道"
                     )
+                    startRecoveryWindow("耳机接入后检测到内建设备")
                 } else {
+                    startRecoveryWindow("耳机接入后确认路由稳定")
                     onStatusChanged?.invoke(GuardStatus.NORMAL)
                 }
             }
@@ -119,24 +164,41 @@ class AudioRouteMonitor(private val context: Context) {
             if (headset != null) {
                 addLog("耳机已断开: ${headset.productName}")
                 if (findConnectedHeadset() == null) {
+                    stopRecoveryWindow("耳机全部断开")
                     onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
                 }
             }
         }
     }
 
+    private fun startRecoveryWindow(reason: String) {
+        val currentComm = audioManager.communicationDevice?.productName
+        val currentHeadset = findConnectedHeadset()?.productName
+        addLog("进入恢复观察窗口: $reason, comm=$currentComm, headset=$currentHeadset")
+        pollingMode = PollingMode.RECOVERY_WINDOW
+        recoveryDeadlineMs = System.currentTimeMillis() + RECOVERY_WINDOW_MS
+        stableHitCount = 0
+        handler.removeCallbacks(recoveryPollingRunnable)
+        handler.post(recoveryPollingRunnable)
+    }
+
+    private fun stopRecoveryWindow(reason: String) {
+        if (pollingMode == PollingMode.IDLE) return
+        pollingMode = PollingMode.IDLE
+        stableHitCount = 0
+        handler.removeCallbacks(recoveryPollingRunnable)
+        addLog("退出恢复观察窗口: $reason")
+    }
+
     fun start() {
         if (running) return
         running = true
-        // Use a dedicated handler thread instead of mainExecutor to avoid
-        // delayed callbacks when the app is in background
+        // Use a handler-backed executor to avoid mainExecutor callback delays in background.
         val callbackHandler = Handler(handler.looper)
         audioManager.addOnCommunicationDeviceChangedListener(
             { callbackHandler.post(it) }, commDeviceListener
         )
         audioManager.registerAudioDeviceCallback(deviceCallback, handler)
-        // Start polling for immediate detection in background
-        handler.post(pollingRunnable)
         addLog("守护已启动")
         val headset = findConnectedHeadset()
         if (headset == null) {
@@ -146,6 +208,7 @@ class AudioRouteMonitor(private val context: Context) {
                 preferredOutputDevice = headset,
                 reason = "启动时检测到声道仍在${builtinDeviceName(audioManager.communicationDevice?.type)}"
             )
+            startRecoveryWindow("启动阶段检测到内建设备")
         } else {
             onStatusChanged?.invoke(GuardStatus.NORMAL)
         }
@@ -154,7 +217,7 @@ class AudioRouteMonitor(private val context: Context) {
     fun stop() {
         if (!running) return
         running = false
-        handler.removeCallbacks(pollingRunnable)
+        stopRecoveryWindow("守护停止")
         audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         clearCommunicationDeviceSafely()
@@ -162,7 +225,11 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     fun fixNow(): Boolean {
-        return restoreCommunicationToHeadset(reason = "手动修复：尝试恢复声道")
+        val fixed = restoreCommunicationToHeadset(reason = "手动修复：尝试恢复声道")
+        if (fixed) {
+            startRecoveryWindow("用户手动触发修复")
+        }
+        return fixed
     }
 
     fun getStatus(): GuardStatus {

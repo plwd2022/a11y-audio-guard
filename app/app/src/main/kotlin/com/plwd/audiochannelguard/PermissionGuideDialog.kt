@@ -22,6 +22,15 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
+private fun hasMissingCriticalPermissions(statusList: List<PermissionStatus>): Boolean {
+    return statusList
+        .filter {
+            it.type == PermissionType.BATTERY_OPTIMIZATION ||
+                it.type == PermissionType.NOTIFICATION
+        }
+        .any { !it.isGranted }
+}
+
 /**
  * 权限引导对话框
  */
@@ -32,18 +41,23 @@ fun PermissionGuideDialog(
 ) {
     val context = LocalContext.current
     val activity = context as? ComponentActivity
+    val initialStatus = remember(context) { PermissionChecker.checkAllPermissions(context) }
     var permissionStatus by remember {
-        mutableStateOf(PermissionChecker.checkAllPermissions(context))
+        mutableStateOf(initialStatus)
+    }
+    var hadMissingCritical by remember {
+        mutableStateOf(hasMissingCriticalPermissions(initialStatus))
     }
     var showManufacturerGuide by remember { mutableStateOf(false) }
 
     fun allCriticalGranted(statusList: List<PermissionStatus>): Boolean {
-        return statusList
-            .filter {
-                it.type == PermissionType.BATTERY_OPTIMIZATION ||
-                    it.type == PermissionType.NOTIFICATION
-            }
-            .all { it.isGranted }
+        return !hasMissingCriticalPermissions(statusList)
+    }
+
+    LaunchedEffect(permissionStatus) {
+        if (!allCriticalGranted(permissionStatus)) {
+            hadMissingCritical = true
+        }
     }
 
     DisposableEffect(activity, context) {
@@ -54,7 +68,7 @@ fun PermissionGuideDialog(
                 if (event == Lifecycle.Event.ON_RESUME) {
                     val latestStatus = PermissionChecker.checkAllPermissions(context)
                     permissionStatus = latestStatus
-                    if (allCriticalGranted(latestStatus)) {
+                    if (hadMissingCritical && allCriticalGranted(latestStatus)) {
                         onAllPermissionsGranted()
                     }
                 }
@@ -179,7 +193,7 @@ fun PermissionGuideDialog(
                             // 刷新权限状态
                             val latestStatus = PermissionChecker.checkAllPermissions(context)
                             permissionStatus = latestStatus
-                            if (allCriticalGranted(latestStatus)) {
+                            if (hadMissingCritical && allCriticalGranted(latestStatus)) {
                                 onAllPermissionsGranted()
                             }
                         }
