@@ -74,6 +74,14 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    
+    override fun onResume() {
+        super.onResume()
+        // 每次回到前台时刷新权限状态
+        (this as? ComponentActivity)?.let { activity ->
+            // 触发重组以更新权限状态显示
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -88,6 +96,15 @@ private fun AudioGuardScreen() {
     var commDeviceName by remember { mutableStateOf("无") }
     var headsetName by remember { mutableStateOf("无") }
     var showAbout by remember { mutableStateOf(false) }
+    var showPermissionGuide by remember { mutableStateOf(false) }
+    
+    // 检查是否需要显示权限引导
+    LaunchedEffect(Unit) {
+        val batteryStatus = PermissionChecker.checkBatteryOptimization(context)
+        if (!batteryStatus.isGranted) {
+            showPermissionGuide = true
+        }
+    }
 
     val refreshState: () -> Unit = {
         serviceRunning = AudioGuardService.isRunning()
@@ -102,14 +119,6 @@ private fun AudioGuardScreen() {
             fixLog = emptyList()
             commDeviceName = "无"
             headsetName = "未连接"
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (AudioGuardApp.isGuardEnabled(context) && !AudioGuardService.isRunning()) {
-            AudioGuardService.start(context)
-            delay(500)
-            refreshState()
         }
     }
 
@@ -136,6 +145,13 @@ private fun AudioGuardScreen() {
     if (showAbout) {
         AboutDialog(onDismiss = { showAbout = false })
     }
+    
+    if (showPermissionGuide) {
+        PermissionGuideDialog(
+            onDismiss = { showPermissionGuide = false },
+            onAllPermissionsGranted = { showPermissionGuide = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -147,10 +163,18 @@ private fun AudioGuardScreen() {
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp),
+                .padding(padding),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // 权限警告条
+            PermissionWarningBar(onClick = { showPermissionGuide = true })
+            
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
             val toggleDesc = if (serviceRunning) "启用守护，已开启" else "启用守护，已关闭"
             Row(
                 modifier = Modifier
@@ -226,6 +250,14 @@ private fun AudioGuardScreen() {
             }
 
             HorizontalDivider()
+            
+            // 权限设置按钮
+            OutlinedButton(
+                onClick = { showPermissionGuide = true },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("权限设置")
+            }
 
             OutlinedButton(
                 onClick = { showAbout = true },
@@ -234,6 +266,7 @@ private fun AudioGuardScreen() {
                 Text("关于本软件")
             }
         }
+            }
     }
 }
 
