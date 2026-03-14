@@ -32,6 +32,7 @@ class AudioRouteMonitor(private val context: Context) {
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO,     // 7
             AudioDeviceInfo.TYPE_USB_HEADSET,       // 22
             AudioDeviceInfo.TYPE_BLE_HEADSET,       // 26
+            AudioDeviceInfo.TYPE_HEARING_AID,       // 23 - Android 14+ 助听器支持
         )
 
         private val COMMUNICATION_HEADSET_TYPES = setOf(
@@ -41,6 +42,7 @@ class AudioRouteMonitor(private val context: Context) {
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
             AudioDeviceInfo.TYPE_USB_HEADSET,
             AudioDeviceInfo.TYPE_BLE_HEADSET,
+            AudioDeviceInfo.TYPE_HEARING_AID,       // Android 14+ 助听器支持
         )
 
         private val BUILTIN_TYPES = setOf(
