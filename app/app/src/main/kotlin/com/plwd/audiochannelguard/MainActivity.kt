@@ -184,6 +184,7 @@ private fun AudioGuardScreen() {
             val statusText = when (status) {
                 GuardStatus.NORMAL -> "正常"
                 GuardStatus.FIXED -> "已修复"
+                GuardStatus.HIJACKED -> "待修复"
                 GuardStatus.NO_HEADSET -> "无耳机"
             }
             Text("当前状态：$statusText", style = MaterialTheme.typography.bodyLarge)

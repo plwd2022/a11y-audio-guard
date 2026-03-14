@@ -93,6 +93,7 @@ class AudioGuardService : Service() {
                 val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
                 "已将声道恢复到 $deviceName"
             }
+            GuardStatus.HIJACKED -> "检测到声道仍在内置设备"
             GuardStatus.NO_HEADSET -> "未检测到耳机"
         }
         val nm = getSystemService(NotificationManager::class.java)
