@@ -50,6 +50,7 @@ class AudioGuardService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (AudioGuardApp.isTampered) {
+            startForeground(NOTIFICATION_ID, buildNotification("签名校验失败"))
             AudioGuardApp.setGuardEnabled(this, false)
             stopSelf()
             return
