@@ -277,8 +277,12 @@ object PermissionChecker {
     private fun getBackgroundRestrictIntent(manufacturer: Manufacturer, context: Context): Intent {
         val candidates = when (manufacturer) {
             Manufacturer.XIAOMI -> listOf(
-                // HyperOS: powerkeeper 已无 Activity，电池管理移至 securitycenter
-                Intent("miui.intent.action.POWER_HIDE_MODE_APP_LIST"),
+                // HyperOS / MIUI: 直接跳转到本应用的电池详情页（可设置省电策略为「无限制」）
+                Intent().apply {
+                    component = ComponentName("com.miui.securitycenter", "com.miui.powercenter.legacypowerrank.PowerDetailActivity")
+                    putExtra("package_name", context.packageName)
+                },
+                // HyperOS: 电池设置主页
                 componentIntent("com.miui.securitycenter", "com.miui.powercenter.PowerSettings"),
                 // MIUI 旧版 powerkeeper
                 Intent().apply {
