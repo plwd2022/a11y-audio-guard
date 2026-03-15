@@ -217,7 +217,17 @@ private fun AudioGuardScreen() {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("启用守护", style = MaterialTheme.typography.titleMedium)
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("启用守护", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Switch(
                     checked = serviceRunning,
                     onCheckedChange = { enabled ->
@@ -255,7 +265,7 @@ private fun AudioGuardScreen() {
                 ) {
                     Text("增强守护（实验性）", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "更强地维持耳机通信路由，可能影响外放和通话音量行为",
+                        "一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -294,8 +304,13 @@ private fun AudioGuardScreen() {
                 },
                 enabled = serviceRunning
             ) {
-                Text("立即修复")
+                Text("手动触发")
             }
+            Text(
+                "通常无需手动操作，仅在声道未自动恢复时点击",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             HorizontalDivider()
 
