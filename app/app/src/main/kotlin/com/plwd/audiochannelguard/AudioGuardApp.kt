@@ -17,6 +17,7 @@ class AudioGuardApp : Application() {
         private const val PREFS_NAME = "audio_guard_prefs"
         private const val KEY_ENABLED = "guard_enabled"
         private const val KEY_ENHANCED_MODE = "enhanced_mode"
+        private const val KEY_TILE_ADDED = "tile_added"
 
         // Release keystore (plwd_cn.keystore) signing certificate SHA-256
         private const val EXPECTED_CERT_HASH =
@@ -49,6 +50,16 @@ class AudioGuardApp : Application() {
         fun setEnhancedModeEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENHANCED_MODE, enabled).apply()
+        }
+
+        fun isTileAdded(context: Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_TILE_ADDED, false)
+        }
+
+        fun setTileAdded(context: Context, added: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_TILE_ADDED, added).apply()
         }
     }
 

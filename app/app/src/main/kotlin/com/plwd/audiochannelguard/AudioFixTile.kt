@@ -5,6 +5,16 @@ import android.service.quicksettings.TileService
 
 class AudioFixTile : TileService() {
 
+    override fun onTileAdded() {
+        super.onTileAdded()
+        AudioGuardApp.setTileAdded(this, true)
+    }
+
+    override fun onTileRemoved() {
+        super.onTileRemoved()
+        AudioGuardApp.setTileAdded(this, false)
+    }
+
     override fun onStartListening() {
         super.onStartListening()
         updateTile()

@@ -104,6 +104,7 @@ private fun AudioGuardScreen() {
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
     var showFixLogDialog by remember { mutableStateOf(false) }
+    var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     val activity = context as? ComponentActivity
 
     // 检查是否需要显示权限引导
@@ -141,6 +142,7 @@ private fun AudioGuardScreen() {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
                     showPermissionWarning = !PermissionChecker.checkBatteryOptimization(context).isGranted
+                    tileAdded = AudioGuardApp.isTileAdded(context)
                     refreshState()
                 }
             }
@@ -226,15 +228,6 @@ private fun AudioGuardScreen() {
                 if (enabled) {
                     AudioGuardService.start(context)
                     ServiceGuard.schedulePeriodicCheck(context)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        val statusBarManager = context.getSystemService(StatusBarManager::class.java)
-                        statusBarManager.requestAddTileService(
-                            ComponentName(context, AudioFixTile::class.java),
-                            context.getString(R.string.tile_label),
-                            Icon.createWithResource(context, R.drawable.ic_headset),
-                            context.mainExecutor
-                        ) { /* 忽略结果 */ }
-                    }
                 } else {
                     AudioGuardService.stop(context)
                 }
@@ -363,6 +356,39 @@ private fun AudioGuardScreen() {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("查看日志")
+            }
+
+            // 快捷设置磁贴
+            if (tileAdded) {
+                Text(
+                    "已添加控制中心磁贴，可在通知栏快捷设置中点击「声道修复」快速恢复",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                OutlinedButton(
+                    onClick = {
+                        val statusBarManager = context.getSystemService(StatusBarManager::class.java)
+                        statusBarManager.requestAddTileService(
+                            ComponentName(context, AudioFixTile::class.java),
+                            context.getString(R.string.tile_label),
+                            Icon.createWithResource(context, R.drawable.ic_headset),
+                            context.mainExecutor
+                        ) { resultCode ->
+                            if (resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED) {
+                                tileAdded = true
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("添加控制中心磁贴")
+                }
+                Text(
+                    "添加后可在通知栏快捷设置中点击「声道修复」快速恢复，无需打开应用",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
 
             // 权限设置按钮
