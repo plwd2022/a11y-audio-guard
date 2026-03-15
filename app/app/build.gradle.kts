@@ -13,9 +13,45 @@ val localProperties = Properties().apply {
     }
 }
 
+val repoDir = rootProject.projectDir.parentFile ?: rootProject.projectDir
+
 fun getSigningConfig(key: String, envVar: String, defaultValue: String): String {
     return System.getenv(envVar)
         ?: localProperties.getProperty(key)
+        ?: defaultValue
+}
+
+fun runGitCommand(vararg args: String): String? {
+    return try {
+        val process = ProcessBuilder(listOf("git", *args))
+            .directory(repoDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText().trim() }
+        if (process.waitFor() == 0 && output.isNotBlank()) output else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun getAppVersionName(defaultValue: String): String {
+    return System.getenv("APP_VERSION_NAME")
+        ?.trim()
+        ?.removePrefix("v")
+        ?.ifBlank { defaultValue }
+        ?: runGitCommand("describe", "--tags", "--abbrev=0", "--match", "v*")
+            ?.removePrefix("v")
+            ?.ifBlank { defaultValue }
+        ?: defaultValue
+}
+
+fun getAppVersionCode(defaultValue: Int): Int {
+    return System.getenv("APP_VERSION_CODE")
+        ?.toIntOrNull()
+        ?.takeIf { it > 0 }
+        ?: runGitCommand("rev-list", "--count", "HEAD")
+            ?.toIntOrNull()
+            ?.takeIf { it > 0 }
         ?: defaultValue
 }
 
@@ -27,8 +63,8 @@ android {
         applicationId = "com.plwd.audiochannelguard"
         minSdk = 31
         targetSdk = 34
-        versionCode = 29
-        versionName = "1.0.1"
+        versionCode = getAppVersionCode(29)
+        versionName = getAppVersionName("1.0.1")
     }
 
     signingConfigs {

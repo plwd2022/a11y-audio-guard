@@ -1,0 +1,168 @@
+name: Build And Release APK
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          RAW_TAG="${GITHUB_REF_NAME}"
+          VERSION_NAME="${RAW_TAG#v}"
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          APK_NAME="AudioChannelGuard-${VERSION_NAME}-${VERSION_CODE}.apk"
+
+          {
+            echo "raw_tag=$RAW_TAG"
+            echo "version_name=$VERSION_NAME"
+            echo "version_code=$VERSION_CODE"
+            echo "apk_name=$APK_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          CURRENT_TAG="${{ steps.meta.outputs.raw_tag }}"
+          PREVIOUS_TAG=""
+
+          mapfile -t TAGS < <(git tag --sort=-version:refname)
+          for i in "${!TAGS[@]}"; do
+            if [[ "${TAGS[$i]}" == "$CURRENT_TAG" ]] && (( i + 1 < ${#TAGS[@]} )); then
+              PREVIOUS_TAG="${TAGS[$((i + 1))]}"
+              break
+            fi
+          done
+
+          if [[ -n "$PREVIOUS_TAG" ]]; then
+            CHANGELOG="$(git log --pretty=format:'- %s' "${PREVIOUS_TAG}..HEAD" | head -n 20)"
+          else
+            CHANGELOG="$(git log --pretty=format:'- %s' -n 20)"
+          fi
+
+          if [[ -z "$CHANGELOG" ]]; then
+            CHANGELOG="- 版本更新"
+          fi
+
+          NOTES_FILE="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "## 版本信息"
+            echo "- 版本号: ${{ steps.meta.outputs.version_name }}"
+            echo "- 内部版本号: ${{ steps.meta.outputs.version_code }}"
+            echo "- Git Tag: $CURRENT_TAG"
+            echo "- 提交哈希: $(git rev-parse --short HEAD)"
+            if [[ -n "$PREVIOUS_TAG" ]]; then
+              echo "- 对比标签: $PREVIOUS_TAG"
+            fi
+            echo
+            echo "## 更新内容"
+            echo "$CHANGELOG"
+          } > "$NOTES_FILE"
+
+          echo "notes_file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x app/gradlew
+
+      - name: Decode signing keystore
+        id: signing
+        env:
+          KEYSTORE_FILE_B64: ${{ secrets.KEYSTORE_FILE }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          missing=0
+          for key in KEYSTORE_FILE_B64 KEYSTORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            if [[ -z "${!key}" ]]; then
+              echo "Missing required secret: $key" >&2
+              missing=1
+            fi
+          done
+
+          if [[ "$missing" -ne 0 ]]; then
+            exit 1
+          fi
+
+          KEYSTORE_PATH="$RUNNER_TEMP/plwd_cn.keystore"
+          echo "$KEYSTORE_FILE_B64" | base64 --decode > "$KEYSTORE_PATH"
+          echo "keystore_path=$KEYSTORE_PATH" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        working-directory: app
+        env:
+          APP_VERSION_NAME: ${{ steps.meta.outputs.version_name }}
+          APP_VERSION_CODE: ${{ steps.meta.outputs.version_code }}
+          SIGNING_STORE_FILE: ${{ steps.signing.outputs.keystore_path }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon clean assembleRelease
+
+      - name: Prepare release artifact
+        id: artifact
+        run: |
+          SOURCE_APK="app/app/build/outputs/apk/release/app-release.apk"
+          TARGET_APK="app/app/build/outputs/apk/release/${{ steps.meta.outputs.apk_name }}"
+
+          if [[ ! -f "$SOURCE_APK" ]]; then
+            find app/app/build/outputs -maxdepth 4 -type f -name "*.apk" -print || true
+            echo "APK not found at $SOURCE_APK" >&2
+            exit 1
+          fi
+ 
+          cp "$SOURCE_APK" "$TARGET_APK"
+          echo "artifact_path=$TARGET_APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.apk_name }}
+          path: ${{ steps.artifact.outputs.artifact_path }}
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.meta.outputs.raw_tag }}"
+          TITLE="AudioChannelGuard ${{ steps.meta.outputs.version_name }}"
+          NOTES_FILE="${{ steps.notes.outputs.notes_file }}"
+          ARTIFACT="${{ steps.artifact.outputs.artifact_path }}"
+          ASSET_LABEL="${{ steps.meta.outputs.apk_name }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES_FILE"
+            gh release upload "$TAG" "$ARTIFACT#$ASSET_LABEL" --clobber
+          else
+            gh release create "$TAG" "$ARTIFACT#$ASSET_LABEL" --title "$TITLE" --notes-file "$NOTES_FILE"
+          fi
