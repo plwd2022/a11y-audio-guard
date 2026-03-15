@@ -95,6 +95,9 @@ private fun AudioGuardScreen() {
     var status by remember { mutableStateOf(GuardStatus.NO_HEADSET) }
     var fixLog by remember { mutableStateOf<List<FixEvent>>(emptyList()) }
     var enhancedEnabled by remember { mutableStateOf(AudioGuardApp.isEnhancedModeEnabled(context)) }
+    var classicBluetoothWidebandEnabled by remember {
+        mutableStateOf(AudioGuardApp.isClassicBluetoothWidebandEnabled(context))
+    }
     var enhancedStateText by remember {
         mutableStateOf(if (enhancedEnabled) "待启动" else "已关闭")
     }
@@ -120,6 +123,7 @@ private fun AudioGuardScreen() {
     val refreshState: () -> Unit = {
         serviceRunning = AudioGuardService.isRunning()
         enhancedEnabled = AudioGuardApp.isEnhancedModeEnabled(context)
+        classicBluetoothWidebandEnabled = AudioGuardApp.isClassicBluetoothWidebandEnabled(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
             status = monitor.getStatus()
@@ -310,6 +314,50 @@ private fun AudioGuardScreen() {
                 }
                 Switch(
                     checked = enhancedEnabled,
+                    onCheckedChange = null
+                )
+            }
+
+            val classicBluetoothWidebandToggleDesc =
+                "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效"
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = classicBluetoothWidebandToggleDesc
+                        role = Role.Switch
+                        toggleableState = ToggleableState(classicBluetoothWidebandEnabled)
+                        stateDescription = if (classicBluetoothWidebandEnabled) "已开启" else "已关闭"
+                    }
+                    .toggleable(
+                        value = classicBluetoothWidebandEnabled,
+                        role = Role.Switch,
+                        onValueChange = { enabled ->
+                            classicBluetoothWidebandEnabled = enabled
+                            AudioGuardApp.setClassicBluetoothWidebandEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setClassicBluetoothWidebandEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    ),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("经典蓝牙更清晰通话音质（实验性）", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = classicBluetoothWidebandEnabled,
                     onCheckedChange = null
                 )
             }

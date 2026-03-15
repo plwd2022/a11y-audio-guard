@@ -59,6 +59,7 @@ class AudioGuardService : Service() {
 
         monitor = AudioRouteMonitor(this)
         monitor.setEnhancedModeEnabled(AudioGuardApp.isEnhancedModeEnabled(this))
+        monitor.setClassicBluetoothWidebandEnabled(AudioGuardApp.isClassicBluetoothWidebandEnabled(this))
         monitor.onStatusChanged = { status ->
             updateNotification(status)
         }

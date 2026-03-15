@@ -71,6 +71,9 @@ class AudioRouteMonitor(private val context: Context) {
         private const val RECOVERY_POLL_MS = 500L
         private const val RECOVERY_WINDOW_MS = 6000L
         private const val REQUIRED_STABLE_HITS = 3
+        private const val CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS = 8000L
+        private val CLASSIC_BLUETOOTH_WIDEBAND_RETRY_DELAYS_MS = longArrayOf(250L, 1200L)
+        private const val CLASSIC_BLUETOOTH_WIDEBAND_HINT = "hfp_set_sampling_rate=16000"
     }
 
     private val audioManager =
@@ -86,8 +89,10 @@ class AudioRouteMonitor(private val context: Context) {
     private var clearProbeHeadset: AudioDeviceInfo? = null
     private var enhancedModeEnabled = false
     private var enhancedState = EnhancedState.DISABLED
+    private var classicBluetoothWidebandEnabled = false
     private var modeListenerRegistered = false
     private var modeRequestedByEnhanced = false
+    private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
 
     private val pollingRunnable = object : Runnable {
         override fun run() {
@@ -212,6 +217,7 @@ class AudioRouteMonitor(private val context: Context) {
                 if (findConnectedHeadset() == null) {
                     stopClearProbe("耳机全部断开")
                     stopRecoveryWindow("耳机全部断开")
+                    classicBluetoothWidebandAttemptTimesMs.clear()
                     clearCommunicationDeviceSafely()
                     if (enhancedModeEnabled) {
                         tryLeaveCommunicationMode("耳机全部断开")
@@ -406,6 +412,7 @@ class AudioRouteMonitor(private val context: Context) {
         stopRecoveryWindow("守护停止")
         unregisterModeListenerIfNeeded()
         tryLeaveCommunicationMode("守护停止")
+        classicBluetoothWidebandAttemptTimesMs.clear()
         audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         clearCommunicationDeviceSafely()
@@ -454,6 +461,16 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     fun isEnhancedModeEnabled(): Boolean = enhancedModeEnabled
+
+    fun setClassicBluetoothWidebandEnabled(enabled: Boolean) {
+        if (classicBluetoothWidebandEnabled == enabled) return
+        classicBluetoothWidebandEnabled = enabled
+        if (!enabled) {
+            classicBluetoothWidebandAttemptTimesMs.clear()
+        }
+    }
+
+    fun isClassicBluetoothWidebandEnabled(): Boolean = classicBluetoothWidebandEnabled
 
     fun getEnhancedState(): EnhancedState {
         return if (enhancedModeEnabled) enhancedState else EnhancedState.DISABLED
@@ -632,6 +649,7 @@ class AudioRouteMonitor(private val context: Context) {
             if (result) {
                 addLog("已将声道恢复到 ${device.productName}")
                 reportStatus(GuardStatus.FIXED)
+                maybeApplyClassicBluetoothWidebandHint(device)
             } else {
                 addLog("系统未接受通信设备切换请求: ${device.productName}")
                 reportStatus(GuardStatus.HIJACKED)
@@ -650,6 +668,67 @@ class AudioRouteMonitor(private val context: Context) {
             reportStatus(GuardStatus.HIJACKED)
             false
         }
+    }
+
+    // This parameter is platform-dependent; treat it as a best-effort hint only.
+    private fun maybeApplyClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo) {
+        if (!running || !classicBluetoothWidebandEnabled || !isClassicBluetoothDevice(targetDevice)) {
+            return
+        }
+
+        val attemptKey = classicBluetoothWidebandAttemptKey(targetDevice)
+        val now = System.currentTimeMillis()
+        val lastAttemptAt = classicBluetoothWidebandAttemptTimesMs[attemptKey]
+        if (lastAttemptAt != null && now - lastAttemptAt < CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS) {
+            return
+        }
+
+        classicBluetoothWidebandAttemptTimesMs[attemptKey] = now
+        applyClassicBluetoothWidebandHint(
+            targetDevice,
+            "已尝试为经典蓝牙争取更清晰的通话音质（16k）"
+        )
+        CLASSIC_BLUETOOTH_WIDEBAND_RETRY_DELAYS_MS.forEach { delayMs ->
+            handler.postDelayed({
+                retryClassicBluetoothWidebandHint(targetDevice, delayMs)
+            }, delayMs)
+        }
+    }
+
+    private fun retryClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo, delayMs: Long) {
+        if (!running || !classicBluetoothWidebandEnabled || !isClassicBluetoothDevice(targetDevice)) {
+            return
+        }
+
+        val currentCommunicationDevice = audioManager.communicationDevice ?: return
+        if (!isSamePhysicalDevice(currentCommunicationDevice, targetDevice)) return
+
+        applyClassicBluetoothWidebandHint(
+            targetDevice,
+            "已再次尝试保持经典蓝牙更清晰通话音质（延迟${delayMs}ms）"
+        )
+    }
+
+    private fun applyClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo, successMessage: String) {
+        try {
+            audioManager.setParameters(CLASSIC_BLUETOOTH_WIDEBAND_HINT)
+            addLog("$successMessage: ${targetDevice.productName}")
+        } catch (exception: RuntimeException) {
+            addLog("尝试提升经典蓝牙通话音质失败(${exception.javaClass.simpleName}): ${targetDevice.productName}")
+        }
+    }
+
+    private fun isClassicBluetoothDevice(device: AudioDeviceInfo): Boolean {
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+    }
+
+    private fun classicBluetoothWidebandAttemptKey(device: AudioDeviceInfo): String {
+        val address = device.address.orEmpty()
+        if (address.isNotEmpty()) {
+            return "${device.type}:$address"
+        }
+        return "${device.type}:${device.productName}"
     }
 
     private fun clearCommunicationDeviceSafely() {

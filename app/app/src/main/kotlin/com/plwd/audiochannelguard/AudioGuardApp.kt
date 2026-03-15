@@ -17,6 +17,7 @@ class AudioGuardApp : Application() {
         private const val PREFS_NAME = "audio_guard_prefs"
         private const val KEY_ENABLED = "guard_enabled"
         private const val KEY_ENHANCED_MODE = "enhanced_mode"
+        private const val KEY_CLASSIC_BLUETOOTH_WIDEBAND = "classic_bluetooth_wideband"
         private const val KEY_TILE_ADDED = "tile_added"
         private const val KEY_AUTO_START_CONFIRMED = "auto_start_confirmed"
         private const val KEY_BG_RESTRICT_CONFIRMED = "bg_restrict_confirmed"
@@ -52,6 +53,16 @@ class AudioGuardApp : Application() {
         fun setEnhancedModeEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENHANCED_MODE, enabled).apply()
+        }
+
+        fun isClassicBluetoothWidebandEnabled(context: Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_CLASSIC_BLUETOOTH_WIDEBAND, false)
+        }
+
+        fun setClassicBluetoothWidebandEnabled(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_CLASSIC_BLUETOOTH_WIDEBAND, enabled).apply()
         }
 
         fun isTileAdded(context: Context): Boolean {
