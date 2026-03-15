@@ -1,8 +1,11 @@
 package com.plwd.audiochannelguard
 
 import android.Manifest
+import android.app.StatusBarManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -223,6 +226,15 @@ private fun AudioGuardScreen() {
                 if (enabled) {
                     AudioGuardService.start(context)
                     ServiceGuard.schedulePeriodicCheck(context)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val statusBarManager = context.getSystemService(StatusBarManager::class.java)
+                        statusBarManager.requestAddTileService(
+                            ComponentName(context, AudioFixTile::class.java),
+                            context.getString(R.string.tile_label),
+                            Icon.createWithResource(context, R.drawable.ic_headset),
+                            context.mainExecutor
+                        ) { /* 忽略结果 */ }
+                    }
                 } else {
                     AudioGuardService.stop(context)
                 }
