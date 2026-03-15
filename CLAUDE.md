@@ -66,14 +66,17 @@ All source is in `app/app/src/main/kotlin/com/plwd/audiochannelguard/`. The app 
 
 ### Monitoring strategy: event-driven + recovery window polling
 
-The app does **not** poll continuously. It uses callbacks as the primary detection mechanism, with a short recovery window (6s, 500ms interval) that activates only when hijacking is detected, a headset connects, or a manual fix is triggered. The window exits early once routing is confirmed stable for 3 consecutive checks.
+The app does **not** poll continuously. It uses callbacks as the primary detection mechanism, with two short polling windows:
+- **Recovery window** (6s, 500ms interval): activates when hijacking is detected, a headset connects, or a manual fix is triggered. Exits early once routing is confirmed stable for 3 consecutive checks.
+- **Clear probe** (200ms, 100ms interval): a brief window used in enhanced mode after clearing the communication device, to detect if the system re-routes correctly before reacquiring `MODE_IN_COMMUNICATION` (250ms reacquire delay).
 
 ### Core components
 
 1. **AudioRouteMonitor** — The central engine. Registers two listeners on `AudioManager`:
    - `OnCommunicationDeviceChangedListener`: fires when any app changes the communication device. If it changed to a built-in speaker/earpiece while a headset is connected, immediately calls `setCommunicationDevice(headset)` to restore routing.
    - `AudioDeviceCallback`: fires on headset connect/disconnect. On connect, checks if communication device is stuck on a built-in and fixes it.
-   - Maintains an in-memory fix log (max 50 entries) and exposes `GuardStatus` enum (NORMAL / FIXED / NO_HEADSET / HIJACKED).
+   - Maintains an in-memory fix log (max 50 entries) and exposes `GuardStatus` enum (NORMAL / FIXED / FIXED_BUT_SPEAKER_ROUTE / NO_HEADSET / HIJACKED).
+   - Supports **enhanced mode** (communication mode management): acquires `MODE_IN_COMMUNICATION` to strengthen routing, with automatic suspension during active calls (`MODE_IN_CALL`, `MODE_RINGTONE`). Exposes `EnhancedState` enum (DISABLED / WAITING_HEADSET / ACTIVE / CLEAR_PROBE / SUSPENDED_BY_CALL).
 
 2. **AudioGuardService** — Foreground service (`specialUse` type) that owns the `AudioRouteMonitor` instance. Exposes a static singleton pattern (`instance`, `getMonitor()`) so the UI and tile can access the monitor. Uses `START_STICKY` and delegates restart to `ServiceGuard` on task removal.
 
@@ -83,7 +86,7 @@ The app does **not** poll continuously. It uses callbacks as the primary detecti
 
 5. **MainActivity** — Jetpack Compose UI. Toggle switch persists enabled state to `SharedPreferences` (`audio_guard_prefs` / `guard_enabled`). Registers `OnServiceRebindListener` callbacks to stay in sync with the monitor. Shows status, device names, and fix log.
 
-6. **PermissionChecker / PermissionGuideDialog** — Permission guidance system. `PermissionChecker` detects battery optimization, notification, auto-start, and background restriction status. Includes manufacturer-specific intent routing for Xiaomi, Huawei, OPPO, vivo, Samsung. `PermissionGuideDialog` renders the Compose dialog and auto-refreshes status on resume.
+6. **PermissionChecker / PermissionGuideDialog** — Permission guidance system. `PermissionChecker` detects battery optimization, notification, auto-start, and background restriction status. Includes manufacturer-specific intent routing for Xiaomi/HyperOS, Huawei/HarmonyOS, OPPO/ColorOS, OnePlus, vivo, Samsung, Meizu with nested fallback chains. `PermissionGuideDialog` renders the Compose dialog with auto-refresh on resume and manual confirmation for permissions not detectable via API.
 
 7. **AudioGuardApp** — Application class. Creates the notification channel, verifies APK signature against a hardcoded SHA-256 hash (anti-tamper with dual-layer verification), and schedules the periodic keep-alive on startup if guard is enabled.
 
@@ -93,7 +96,7 @@ The app does **not** poll continuously. It uses callbacks as the primary detecti
 
 - Supported headset types: `TYPE_WIRED_HEADSET`, `TYPE_WIRED_HEADPHONES`, `TYPE_BLUETOOTH_A2DP`, `TYPE_BLUETOOTH_SCO`, `TYPE_USB_HEADSET`, `TYPE_BLE_HEADSET`, `TYPE_HEARING_AID` (defined in `AudioRouteMonitor.HEADSET_TYPES`)
 - Built-in types that trigger fix: `TYPE_BUILTIN_SPEAKER`, `TYPE_BUILTIN_EARPIECE`
-- SharedPreferences name: `audio_guard_prefs`, key: `guard_enabled`
+- SharedPreferences name: `audio_guard_prefs`, keys: `guard_enabled`, `enhanced_mode`, `tile_added`, `auto_start_confirmed`, `bg_restrict_confirmed`
 - Notification channel ID: `audio_guard_channel`
 - Recovery window: 6s duration, 500ms poll interval, 3 stable hits to exit
 

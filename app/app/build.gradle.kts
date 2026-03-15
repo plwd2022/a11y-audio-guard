@@ -27,8 +27,8 @@ android {
         applicationId = "com.plwd.audiochannelguard"
         minSdk = 31
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 29
+        versionName = "1.0.1"
     }
 
     signingConfigs {
