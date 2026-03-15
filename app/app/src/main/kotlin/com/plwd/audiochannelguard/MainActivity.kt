@@ -435,9 +435,8 @@ private fun AboutDialog(onDismiss: () -> Unit) {
             ) {
                 Text("问题背景", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Android 14 起，系统以 setCommunicationDevice() 取代了旧的 " +
-                    "setSpeakerphoneOn() 来管理通信音频路由。但抖音、微信等应用在播放语音消息时" +
-                    "仍调用 setSpeakerphoneOn(true)，播放结束后未释放，" +
+                    "Android 13 起，部分应用（如抖音、微信）在播放语音消息时" +
+                    "调用 setSpeakerphoneOn(true)，播放结束后未释放，" +
                     "导致通信音频流被锁定在内置扬声器。TalkBack 等屏幕阅读器的语音输出因此被劫持，" +
                     "严重影响依赖耳机的视障用户。"
                 )
@@ -447,7 +446,7 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                     "通过 OnCommunicationDeviceChangedListener 实时监听通信设备变更，" +
                     "当检测到通信设备被异常切换至内置扬声器且有耳机连接时，" +
                     "自动调用 setCommunicationDevice() 将音频路由恢复至耳机。\n\n" +
-                    "支持设备类型：USB 耳机、有线耳机/耳麦、蓝牙 A2DP、BLE 音频设备。"
+                    "支持设备类型：USB 耳机、有线耳机/耳麦、蓝牙 A2DP/SCO、BLE 音频设备。"
                 )
 
                 HorizontalDivider()

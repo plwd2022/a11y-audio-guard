@@ -4,7 +4,7 @@ This file provides essential information for AI coding agents working on the Aud
 
 ## Project Overview
 
-**AudioChannelGuard** is an Android accessibility app that fixes an audio routing bug on Android 14+ where apps like TikTok (抖音) and WeChat hijack the communication audio route to the speaker via `setSpeakerphoneOn(true)` and never release it. This breaks TalkBack output for visually impaired users who use headsets.
+**AudioChannelGuard** is an Android accessibility app that fixes an audio routing bug on Android 13+ where apps like TikTok (抖音) and WeChat hijack the communication audio route to the speaker via `setSpeakerphoneOn(true)` and never release it. This breaks TalkBack output for visually impaired users who use headsets.
 
 The app monitors communication device changes and automatically calls `setCommunicationDevice(headset)` to restore audio routing when hijacking is detected. All APIs used are public (API 31+), no root required.
 
@@ -233,7 +233,7 @@ The file `app/app/proguard-rules.pro` keeps all manifest-declared components:
 
 | File | Description |
 |------|-------------|
-| `research-report.md` | Detailed technical analysis of the Android 14+ audio routing bug (Chinese) |
+| `research-report.md` | Detailed technical analysis of the Android 13+ audio routing bug (Chinese) |
 | `developer-message.md` | Developer communication explaining the bug root cause (Chinese) |
 | `plwd_cn.keystore说明.md` | Keystore usage instructions (Chinese) |
 | `CLAUDE.md` | Original Claude Code guidance |

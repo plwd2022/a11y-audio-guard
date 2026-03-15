@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**AudioChannelGuard** (无障碍声道守护) is an Android app that fixes an audio routing bug on Android 14+ where apps like TikTok/WeChat hijack the communication audio route to the speaker via `setSpeakerphoneOn(true)` and never release it, breaking TalkBack output for visually impaired users who use headsets.
+**AudioChannelGuard** (无障碍声道守护) is an Android app that fixes an audio routing bug on Android 13+ where apps like TikTok/WeChat hijack the communication audio route to the speaker via `setSpeakerphoneOn(true)` and never release it, breaking TalkBack output for visually impaired users who use headsets.
 
 The app monitors communication device changes and automatically calls `setCommunicationDevice(headset)` to restore audio routing when hijack is detected. All APIs used are public (API 31+), no root required.
 

@@ -2,7 +2,7 @@
 
 ## 1. 项目定位
 
-AudioChannelGuard（无障碍声道守护）是一个面向 Android 12+（重点是 Android 14+）的通信音频路由纠偏工具。
+AudioChannelGuard（无障碍声道守护）是一个面向 Android 13+ 的通信音频路由纠偏工具。
 
 它解决的问题不是“通话质量”本身，而是：在用户已连接耳机时，部分 App（如抖音、微信）通过 `setSpeakerphoneOn(true)` 把通信路由错误拉到扬声器，并且未及时释放，导致 TalkBack 等无障碍播报从耳机跳到外放，带来隐私泄露和使用中断。
 
@@ -12,7 +12,7 @@ AudioChannelGuard（无障碍声道守护）是一个面向 Android 12+（重点
 - 在检测到“被劫持到内建扬声器/听筒”时，调用 `setCommunicationDevice(headset)` 抢回耳机路由
 - 提供前台服务常驻、快捷开关、手动一键修复
 
-所有关键 API 为 Android 公开 API（API 31+），无需 root。
+所有关键 API 为 Android 公开 API（API 33+），无需 root。
 
 ---
 

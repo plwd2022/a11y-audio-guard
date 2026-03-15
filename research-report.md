@@ -1,10 +1,10 @@
-# Android 14+ 无障碍音频路由劫持问题研究报告
+# Android 13+ 无障碍音频路由劫持问题研究报告
 
 ## 1. 问题描述
 
 ### 1.1 现象
 
-在 Android 14 及以上版本中，当用户插着耳机（USB 耳机、蓝牙耳机或有线耳机）使用屏幕阅读器（TalkBack）时，打开微信、抖音等社交 App 播放语音消息或视频后，TalkBack 的语音输出会从耳机**错误地切换到手机扬声器**，导致：
+在 Android 13 及以上版本中，当用户插着耳机（USB 耳机、蓝牙耳机或有线耳机）使用屏幕阅读器（TalkBack）时，打开微信、抖音等社交 App 播放语音消息或视频后，TalkBack 的语音输出会从耳机**错误地切换到手机扬声器**，导致：
 
 - 无障碍语音从扬声器外放，**泄露用户隐私**
 - 声音在扬声器和耳机之间**反复跳跃**（每 200-700ms 振荡一次）
@@ -14,7 +14,7 @@
 
 | 维度 | 范围 |
 |------|------|
-| 系统版本 | Android 14 及以上 |
+| 系统版本 | Android 13 及以上 |
 | 耳机类型 | USB 耳机、蓝牙耳机、有线耳机均受影响 |
 | 触发 App | 微信、抖音、QQ 等社交类 App |
 | 受影响功能 | TalkBack、Switch Access 等所有走 `STRATEGY_ACCESSIBILITY` 的无障碍服务 |
@@ -26,7 +26,7 @@
 | 项目 | 信息 |
 |------|------|
 | 设备 | 25060RK16C（MediaTek 平台） |
-| 系统版本 | Android 14+ |
+| 系统版本 | Android 13+ |
 | 屏幕阅读器 | com.android.tback |
 | TTS 引擎 | es.codefactory.vocalizertts (Vocalizer) |
 | 测试耳机 | USB-Audio - H180 Plus (Type-C) |
