@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -40,8 +41,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -209,11 +215,36 @@ private fun AudioGuardScreen() {
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            val toggleDesc = if (serviceRunning) "启用守护，已开启" else "启用守护，已关闭"
+            val toggleDesc = "启用守护。开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行"
+            val guardToggleAction = {
+                val enabled = !serviceRunning
+                serviceRunning = enabled
+                AudioGuardApp.setGuardEnabled(context, enabled)
+                if (enabled) {
+                    AudioGuardService.start(context)
+                    ServiceGuard.schedulePeriodicCheck(context)
+                } else {
+                    AudioGuardService.stop(context)
+                }
+                scope.launch {
+                    delay(500)
+                    refreshState()
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics { contentDescription = toggleDesc },
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = toggleDesc
+                        role = Role.Switch
+                        toggleableState = ToggleableState(serviceRunning)
+                        stateDescription = if (serviceRunning) "已开启" else "已关闭"
+                    }
+                    .toggleable(
+                        value = serviceRunning,
+                        role = Role.Switch,
+                        onValueChange = { guardToggleAction() }
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -230,32 +261,33 @@ private fun AudioGuardScreen() {
                 }
                 Switch(
                     checked = serviceRunning,
-                    onCheckedChange = { enabled ->
-                        serviceRunning = enabled
-                        AudioGuardApp.setGuardEnabled(context, enabled)
-                        if (enabled) {
-                            AudioGuardService.start(context)
-                            ServiceGuard.schedulePeriodicCheck(context)
-                        } else {
-                            AudioGuardService.stop(context)
-                        }
-                        scope.launch {
-                            delay(500)
-                            refreshState()
-                        }
-                    }
+                    onCheckedChange = null
                 )
             }
 
-            val enhancedToggleDesc = if (enhancedEnabled) {
-                "增强守护，已开启"
-            } else {
-                "增强守护，已关闭"
-            }
+            val enhancedToggleDesc = "增强守护（实验性）。一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为"
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics { contentDescription = enhancedToggleDesc },
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = enhancedToggleDesc
+                        role = Role.Switch
+                        toggleableState = ToggleableState(enhancedEnabled)
+                        stateDescription = if (enhancedEnabled) "已开启" else "已关闭"
+                    }
+                    .toggleable(
+                        value = enhancedEnabled,
+                        role = Role.Switch,
+                        onValueChange = { enabled ->
+                            enhancedEnabled = enabled
+                            AudioGuardApp.setEnhancedModeEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setEnhancedModeEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -272,15 +304,7 @@ private fun AudioGuardScreen() {
                 }
                 Switch(
                     checked = enhancedEnabled,
-                    onCheckedChange = { enabled ->
-                        enhancedEnabled = enabled
-                        AudioGuardApp.setEnhancedModeEnabled(context, enabled)
-                        AudioGuardService.getMonitor()?.setEnhancedModeEnabled(enabled)
-                        scope.launch {
-                            delay(300)
-                            refreshState()
-                        }
-                    }
+                    onCheckedChange = null
                 )
             }
 
