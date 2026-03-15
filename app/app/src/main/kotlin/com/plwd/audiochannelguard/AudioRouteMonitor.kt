@@ -78,6 +78,7 @@ class AudioRouteMonitor(private val context: Context) {
     private var running = false
 
     private var pollingMode = PollingMode.IDLE
+    private var lastReportedStatus = GuardStatus.NO_HEADSET
     private var clearProbeDeadlineMs = 0L
     private var recoveryDeadlineMs = 0L
     private var stableHitCount = 0
@@ -108,6 +109,11 @@ class AudioRouteMonitor(private val context: Context) {
     val fixLog: List<FixEvent> get() = _fixLog.toList()
 
     var onStatusChanged: ((GuardStatus) -> Unit)? = null
+    private fun reportStatus(status: GuardStatus) {
+        lastReportedStatus = status
+        onStatusChanged?.invoke(status)
+    }
+
     var onFixLogUpdated: (() -> Unit)? = null
     var onEnhancedStateChanged: ((EnhancedState) -> Unit)? = null
 
@@ -148,7 +154,7 @@ class AudioRouteMonitor(private val context: Context) {
                 if (enhancedModeEnabled) {
                     updateEnhancedState(EnhancedState.WAITING_HEADSET)
                 }
-                onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+                reportStatus(GuardStatus.NO_HEADSET)
                 return@OnCommunicationDeviceChangedListener
             }
 
@@ -170,7 +176,7 @@ class AudioRouteMonitor(private val context: Context) {
                 if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
                     updateEnhancedState(EnhancedState.ACTIVE)
                 }
-                onStatusChanged?.invoke(GuardStatus.NORMAL)
+                reportStatus(GuardStatus.NORMAL)
             }
         }
 
@@ -193,7 +199,7 @@ class AudioRouteMonitor(private val context: Context) {
                     startRecoveryWindow("耳机接入后检测到内建设备")
                 } else {
                     startRecoveryWindow("耳机接入后确认路由稳定")
-                    onStatusChanged?.invoke(GuardStatus.NORMAL)
+                    reportStatus(GuardStatus.NORMAL)
                 }
             }
         }
@@ -210,7 +216,7 @@ class AudioRouteMonitor(private val context: Context) {
                         tryLeaveCommunicationMode("耳机全部断开")
                         updateEnhancedState(EnhancedState.WAITING_HEADSET)
                     }
-                    onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+                    reportStatus(GuardStatus.NO_HEADSET)
                 }
             }
         }
@@ -225,7 +231,7 @@ class AudioRouteMonitor(private val context: Context) {
             if (enhancedModeEnabled) {
                 updateEnhancedState(EnhancedState.WAITING_HEADSET)
             }
-            onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
             return
         }
 
@@ -237,7 +243,7 @@ class AudioRouteMonitor(private val context: Context) {
         if (restoredNaturally) {
             stopClearProbe("系统已自动恢复到耳机")
             updateEnhancedState(EnhancedState.ACTIVE)
-            onStatusChanged?.invoke(GuardStatus.NORMAL)
+            reportStatus(GuardStatus.NORMAL)
             return
         }
 
@@ -258,7 +264,7 @@ class AudioRouteMonitor(private val context: Context) {
         if (System.currentTimeMillis() >= clearProbeDeadlineMs) {
             stopClearProbe("观察窗口结束")
             updateEnhancedState(EnhancedState.ACTIVE)
-            onStatusChanged?.invoke(GuardStatus.NORMAL)
+            reportStatus(GuardStatus.NORMAL)
             return
         }
 
@@ -276,7 +282,7 @@ class AudioRouteMonitor(private val context: Context) {
         val headset = findConnectedHeadset()
         if (headset == null) {
             stopRecoveryWindow("恢复观察窗口内未检测到耳机")
-            onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
             return
         }
 
@@ -299,7 +305,7 @@ class AudioRouteMonitor(private val context: Context) {
             stableHitCount++
             if (stableHitCount >= REQUIRED_STABLE_HITS) {
                 stopRecoveryWindow("路由已连续稳定 $REQUIRED_STABLE_HITS 次")
-                onStatusChanged?.invoke(GuardStatus.NORMAL)
+                reportStatus(GuardStatus.NORMAL)
                 return
             }
         } else {
@@ -316,7 +322,7 @@ class AudioRouteMonitor(private val context: Context) {
         val headset = preferredHeadset ?: findConnectedHeadset()
         if (headset == null) {
             updateEnhancedState(EnhancedState.WAITING_HEADSET)
-            onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
             return
         }
 
@@ -327,7 +333,7 @@ class AudioRouteMonitor(private val context: Context) {
         addLog("$reason，先释放本应用占用并观察系统是否自动恢复")
         clearCommunicationDeviceSafely()
         updateEnhancedState(EnhancedState.CLEAR_PROBE)
-        onStatusChanged?.invoke(GuardStatus.HIJACKED)
+        reportStatus(GuardStatus.HIJACKED)
         handler.removeCallbacks(pollingRunnable)
         handler.post(pollingRunnable)
     }
@@ -377,7 +383,7 @@ class AudioRouteMonitor(private val context: Context) {
             if (enhancedModeEnabled) {
                 updateEnhancedState(EnhancedState.WAITING_HEADSET)
             }
-            onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
         } else if (enhancedModeEnabled) {
             maybeReacquireEnhancedMode("增强守护启动")
         } else if (audioManager.communicationDevice?.type in BUILTIN_TYPES) {
@@ -387,7 +393,7 @@ class AudioRouteMonitor(private val context: Context) {
             )
             startRecoveryWindow("启动阶段检测到内建设备")
         } else {
-            onStatusChanged?.invoke(GuardStatus.NORMAL)
+            reportStatus(GuardStatus.NORMAL)
         }
     }
 
@@ -458,6 +464,8 @@ class AudioRouteMonitor(private val context: Context) {
         val commDevice = audioManager.communicationDevice
         return if (pollingMode == PollingMode.CLEAR_PROBE || commDevice?.type in BUILTIN_TYPES) {
             GuardStatus.HIJACKED
+        } else if (lastReportedStatus == GuardStatus.FIXED) {
+            GuardStatus.FIXED
         } else {
             GuardStatus.NORMAL
         }
@@ -527,7 +535,7 @@ class AudioRouteMonitor(private val context: Context) {
                 }
             }
 
-            else -> onStatusChanged?.invoke(GuardStatus.NORMAL)
+            else -> reportStatus(GuardStatus.NORMAL)
         }
     }
 
@@ -577,7 +585,7 @@ class AudioRouteMonitor(private val context: Context) {
         val outputHeadset = preferredOutputDevice ?: findConnectedHeadset()
         if (outputHeadset == null) {
             addLog("无法修复：未检测到耳机")
-            onStatusChanged?.invoke(GuardStatus.NO_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
             return false
         }
 
@@ -586,7 +594,7 @@ class AudioRouteMonitor(private val context: Context) {
         val communicationHeadset = findAvailableCommunicationHeadset(outputHeadset)
         if (communicationHeadset == null) {
             addLog("已连接 ${outputHeadset.productName}，但系统当前未提供可用的通信耳机设备")
-            onStatusChanged?.invoke(GuardStatus.HIJACKED)
+            reportStatus(GuardStatus.HIJACKED)
             return false
         }
 
@@ -616,23 +624,23 @@ class AudioRouteMonitor(private val context: Context) {
             val result = audioManager.setCommunicationDevice(device)
             if (result) {
                 addLog("已将声道恢复到 ${device.productName}")
-                onStatusChanged?.invoke(GuardStatus.FIXED)
+                reportStatus(GuardStatus.FIXED)
             } else {
                 addLog("系统未接受通信设备切换请求: ${device.productName}")
-                onStatusChanged?.invoke(GuardStatus.HIJACKED)
+                reportStatus(GuardStatus.HIJACKED)
             }
             result
         } catch (exception: IllegalArgumentException) {
             addLog("通信设备切换失败(${exception.javaClass.simpleName}): ${device.productName}")
-            onStatusChanged?.invoke(GuardStatus.HIJACKED)
+            reportStatus(GuardStatus.HIJACKED)
             false
         } catch (exception: IllegalStateException) {
             addLog("通信设备切换失败(${exception.javaClass.simpleName}): ${device.productName}")
-            onStatusChanged?.invoke(GuardStatus.HIJACKED)
+            reportStatus(GuardStatus.HIJACKED)
             false
         } catch (exception: SecurityException) {
             addLog("通信设备切换失败(${exception.javaClass.simpleName}): ${device.productName}")
-            onStatusChanged?.invoke(GuardStatus.HIJACKED)
+            reportStatus(GuardStatus.HIJACKED)
             false
         }
     }
