@@ -98,7 +98,13 @@ class AudioRouteMonitor(private val context: Context) {
     private var modeListenerRegistered = false
     private var modeRequestedByEnhanced = false
     private var guardOwnsCommunicationDevice = false
+    private var classicBluetoothStickyHoldActive = false
+    private var classicBluetoothManualReleaseInProgress = false
+    private var classicBluetoothHoldMessage: String? = null
     private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
+    private val statusListeners = linkedSetOf<(GuardStatus) -> Unit>()
+    private val fixLogListeners = linkedSetOf<() -> Unit>()
+    private val enhancedStateListeners = linkedSetOf<(EnhancedState) -> Unit>()
 
     private val pollingRunnable = object : Runnable {
         override fun run() {
@@ -125,10 +131,35 @@ class AudioRouteMonitor(private val context: Context) {
     private fun reportStatus(status: GuardStatus) {
         lastReportedStatus = status
         onStatusChanged?.invoke(status)
+        statusListeners.toList().forEach { it(status) }
     }
 
     var onFixLogUpdated: (() -> Unit)? = null
     var onEnhancedStateChanged: ((EnhancedState) -> Unit)? = null
+
+    fun addStatusListener(listener: (GuardStatus) -> Unit) {
+        statusListeners.add(listener)
+    }
+
+    fun removeStatusListener(listener: (GuardStatus) -> Unit) {
+        statusListeners.remove(listener)
+    }
+
+    fun addFixLogListener(listener: () -> Unit) {
+        fixLogListeners.add(listener)
+    }
+
+    fun removeFixLogListener(listener: () -> Unit) {
+        fixLogListeners.remove(listener)
+    }
+
+    fun addEnhancedStateListener(listener: (EnhancedState) -> Unit) {
+        enhancedStateListeners.add(listener)
+    }
+
+    fun removeEnhancedStateListener(listener: (EnhancedState) -> Unit) {
+        enhancedStateListeners.remove(listener)
+    }
 
     private val modeChangedListener =
         AudioManager.OnModeChangedListener { mode ->
@@ -181,6 +212,11 @@ class AudioRouteMonitor(private val context: Context) {
             }
 
             if (device?.type in BUILTIN_TYPES) {
+                if (pollingMode == PollingMode.RELEASE_PROBE) {
+                    val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
+                    handleReleaseProbeBuiltinRouteDetected(headset, builtInDevice)
+                    return@OnCommunicationDeviceChangedListener
+                }
                 if (enhancedModeEnabled) {
                     val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
                     handleEnhancedBuiltinRouteDetected(headset, builtInDevice)
@@ -232,6 +268,7 @@ class AudioRouteMonitor(private val context: Context) {
                     stopRecoveryWindow("耳机全部断开")
                     stopReleaseProbe("耳机全部断开")
                     classicBluetoothWidebandAttemptTimesMs.clear()
+                    clearClassicBluetoothHoldState()
                     clearCommunicationDeviceSafely()
                     if (enhancedModeEnabled) {
                         tryLeaveCommunicationMode("耳机全部断开")
@@ -326,7 +363,14 @@ class AudioRouteMonitor(private val context: Context) {
             stableHitCount++
             if (stableHitCount >= REQUIRED_STABLE_HITS) {
                 val reason = "路由已连续稳定 $REQUIRED_STABLE_HITS 次"
-                if (hasGuardCommunicationHold()) {
+                if (shouldKeepClassicBluetoothHoldAfterRecovery(headset)) {
+                    stopRecoveryWindow(reason)
+                    if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                        updateEnhancedState(EnhancedState.ACTIVE)
+                    }
+                    enterClassicBluetoothStickyHold(reason)
+                    reportStatus(GuardStatus.FIXED)
+                } else if (hasGuardCommunicationHold()) {
                     startReleaseProbe(headset, reason)
                 } else {
                     stopRecoveryWindow(reason)
@@ -359,37 +403,14 @@ class AudioRouteMonitor(private val context: Context) {
 
         val commDevice = audioManager.communicationDevice
         if (commDevice?.type in BUILTIN_TYPES) {
-            stopReleaseProbe("归还后仍停留在${builtinDeviceName(commDevice?.type)}")
-            if (enhancedModeEnabled) {
-                tryEnterCommunicationMode("归还系统后检测到劫持再次出现")
-            }
-            val fixed = restoreCommunicationToHeadset(
-                preferredOutputDevice = headset,
-                reason = "归还系统后仍被劫持到${builtinDeviceName(commDevice?.type)}，重新接管到耳机"
-            )
-            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
-                updateEnhancedState(EnhancedState.ACTIVE)
-            }
-            if (fixed) {
-                startRecoveryWindow("归还系统后仍存在劫持，重新接管")
-            }
-            return
-        }
-
-        val communicationHeadset = findAvailableCommunicationHeadset(headset)
-        val routedToHeadset =
-            commDevice != null && communicationHeadset != null && isSamePhysicalDevice(commDevice, communicationHeadset)
-        if (routedToHeadset) {
-            stopReleaseProbe("系统已接管到耳机")
-            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
-                updateEnhancedState(EnhancedState.ACTIVE)
-            }
-            reportStatus(GuardStatus.NORMAL)
+            val builtInDevice = commDevice ?: return
+            handleReleaseProbeBuiltinRouteDetected(headset, builtInDevice)
             return
         }
 
         if (System.currentTimeMillis() >= releaseProbeDeadlineMs) {
             stopReleaseProbe("归还系统后未再检测到劫持")
+            clearClassicBluetoothHoldState()
             if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
                 updateEnhancedState(EnhancedState.ACTIVE)
             }
@@ -534,6 +555,7 @@ class AudioRouteMonitor(private val context: Context) {
         unregisterModeListenerIfNeeded()
         tryLeaveCommunicationMode("守护停止")
         classicBluetoothWidebandAttemptTimesMs.clear()
+        clearClassicBluetoothHoldState()
         audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         clearCommunicationDeviceSafely()
@@ -579,6 +601,7 @@ class AudioRouteMonitor(private val context: Context) {
             stopReleaseProbe("增强守护已关闭")
             unregisterModeListenerIfNeeded()
             tryLeaveCommunicationMode("增强守护已关闭")
+            clearClassicBluetoothHoldState()
             clearCommunicationDeviceSafely()
             updateEnhancedState(EnhancedState.DISABLED)
         }
@@ -595,6 +618,27 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     fun isClassicBluetoothWidebandEnabled(): Boolean = classicBluetoothWidebandEnabled
+
+    fun canManuallyReleaseHeldBluetoothRoute(): Boolean {
+        return classicBluetoothStickyHoldActive && !classicBluetoothManualReleaseInProgress
+    }
+
+    fun getHeldBluetoothRouteMessage(): String? {
+        return classicBluetoothHoldMessage
+    }
+
+    fun tryManualReleaseHeldBluetoothRoute(trigger: String): Boolean {
+        if (!running || !canManuallyReleaseHeldBluetoothRoute() || !hasGuardCommunicationHold()) return false
+
+        val headset = findConnectedHeadset() ?: return false
+        if (!isClassicBluetoothOutputDevice(headset)) return false
+
+        classicBluetoothManualReleaseInProgress = true
+        classicBluetoothHoldMessage = "正在尝试归还蓝牙音频控制权"
+        notifyCurrentStatusChanged()
+        startReleaseProbe(headset, "$trigger，尝试归还蓝牙音频控制权")
+        return true
+    }
 
     fun getEnhancedState(): EnhancedState {
         return if (enhancedModeEnabled) enhancedState else EnhancedState.DISABLED
@@ -632,6 +676,7 @@ class AudioRouteMonitor(private val context: Context) {
         if (enhancedState == state) return
         enhancedState = state
         onEnhancedStateChanged?.invoke(state)
+        enhancedStateListeners.toList().forEach { it(state) }
     }
 
     private fun registerModeListenerIfNeeded() {
@@ -750,6 +795,72 @@ class AudioRouteMonitor(private val context: Context) {
         }
     }
 
+    private fun shouldKeepClassicBluetoothHoldAfterRecovery(headset: AudioDeviceInfo): Boolean {
+        if (!hasGuardCommunicationHold()) return false
+        val commDevice = audioManager.communicationDevice ?: return false
+        val communicationHeadset = findAvailableCommunicationHeadset(headset) ?: return false
+        return isClassicBluetoothDevice(commDevice) &&
+            isSamePhysicalDevice(commDevice, communicationHeadset)
+    }
+
+    private fun enterClassicBluetoothStickyHold(reason: String) {
+        classicBluetoothStickyHoldActive = true
+        classicBluetoothManualReleaseInProgress = false
+        classicBluetoothHoldMessage =
+            "蓝牙音频已被应用接管，如抢占声道应用已关闭，您可点击尝试解除该限制"
+        addLog("$reason，经典蓝牙暂不自动归还，等待用户手动解除限制")
+        notifyCurrentStatusChanged()
+    }
+
+    private fun markClassicBluetoothReleaseFailed() {
+        classicBluetoothStickyHoldActive = true
+        classicBluetoothManualReleaseInProgress = false
+        classicBluetoothHoldMessage =
+            "检测到声道劫持，已重新接管蓝牙音频。如抢占声道应用已关闭，您可再次尝试解除该限制"
+        notifyCurrentStatusChanged()
+    }
+
+    private fun clearClassicBluetoothHoldState() {
+        val changed =
+            classicBluetoothStickyHoldActive || classicBluetoothManualReleaseInProgress || classicBluetoothHoldMessage != null
+        classicBluetoothStickyHoldActive = false
+        classicBluetoothManualReleaseInProgress = false
+        classicBluetoothHoldMessage = null
+        if (changed) {
+            notifyCurrentStatusChanged()
+        }
+    }
+
+    private fun isClassicBluetoothOutputDevice(device: AudioDeviceInfo): Boolean {
+        return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+    }
+
+    private fun handleReleaseProbeBuiltinRouteDetected(
+        headset: AudioDeviceInfo,
+        builtInDevice: AudioDeviceInfo,
+    ) {
+        val builtInName = builtinDeviceName(builtInDevice.type)
+        stopReleaseProbe("归还系统后回调检测到劫持再次出现")
+        if (classicBluetoothManualReleaseInProgress) {
+            markClassicBluetoothReleaseFailed()
+            addLog("检测到声道重新被劫持到$builtInName，已重新接管蓝牙音频")
+        }
+        if (enhancedModeEnabled) {
+            tryEnterCommunicationMode("归还系统后回调检测到劫持再次出现")
+        }
+        val fixed = restoreCommunicationToHeadset(
+            preferredOutputDevice = headset,
+            reason = "归还系统后仍被劫持到$builtInName，重新接管到耳机"
+        )
+        if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+            updateEnhancedState(EnhancedState.ACTIVE)
+        }
+        if (fixed) {
+            startRecoveryWindow("归还系统后回调检测到劫持，重新接管")
+        }
+    }
+
     private fun tryEnterCommunicationMode(reason: String) {
         if (shouldSuspendForCall(audioManager.mode)) return
 
@@ -836,6 +947,9 @@ class AudioRouteMonitor(private val context: Context) {
             val result = audioManager.setCommunicationDevice(device)
             if (result) {
                 guardOwnsCommunicationDevice = true
+                if (!isClassicBluetoothDevice(device)) {
+                    clearClassicBluetoothHoldState()
+                }
                 addLog("已将声道恢复到 ${device.productName}")
                 reportStatus(GuardStatus.FIXED)
                 maybeApplyClassicBluetoothWidebandHint(device, previousCommunicationDevice)
@@ -958,6 +1072,11 @@ class AudioRouteMonitor(private val context: Context) {
         return guardOwnsCommunicationDevice || modeRequestedByEnhanced
     }
 
+    private fun notifyCurrentStatusChanged() {
+        onStatusChanged?.invoke(lastReportedStatus)
+        statusListeners.toList().forEach { it(lastReportedStatus) }
+    }
+
     private fun builtinDeviceName(type: Int?): String {
         return if (type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) "听筒" else "扬声器"
     }
@@ -967,5 +1086,6 @@ class AudioRouteMonitor(private val context: Context) {
         _fixLog.add(0, FixEvent(System.currentTimeMillis(), message))
         if (_fixLog.size > 50) _fixLog.removeAt(_fixLog.lastIndex)
         onFixLogUpdated?.invoke()
+        fixLogListeners.toList().forEach { it() }
     }
 }

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
@@ -103,12 +104,15 @@ private fun AudioGuardScreen() {
     }
     var commDeviceName by remember { mutableStateOf("无") }
     var headsetName by remember { mutableStateOf("无") }
+    var heldBluetoothRouteMessage by remember { mutableStateOf<String?>(null) }
+    var canManualReleaseBluetoothRoute by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
     var showFixLogDialog by remember { mutableStateOf(false) }
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     val activity = context as? ComponentActivity
+    val contentScrollState = rememberScrollState()
 
     // 检查是否需要显示权限引导
     LaunchedEffect(Unit) {
@@ -131,12 +135,16 @@ private fun AudioGuardScreen() {
             enhancedStateText = enhancedStateToText(monitor.getEnhancedState())
             commDeviceName = monitor.getCommunicationDevice()?.productName?.toString() ?: "无"
             headsetName = monitor.findConnectedHeadset()?.productName?.toString() ?: "未连接"
+            heldBluetoothRouteMessage = monitor.getHeldBluetoothRouteMessage()
+            canManualReleaseBluetoothRoute = monitor.canManuallyReleaseHeldBluetoothRoute()
         } else {
             status = GuardStatus.NO_HEADSET
             fixLog = emptyList()
             enhancedStateText = if (enhancedEnabled) "待启动" else "已关闭"
             commDeviceName = "无"
             headsetName = "未连接"
+            heldBluetoothRouteMessage = null
+            canManualReleaseBluetoothRoute = false
         }
     }
 
@@ -160,11 +168,14 @@ private fun AudioGuardScreen() {
 
     DisposableEffect(Unit) {
         refreshState()
+        val statusListener: (GuardStatus) -> Unit = { _ -> refreshState() }
+        val fixLogListener: () -> Unit = { refreshState() }
+        val enhancedStateListener: (EnhancedState) -> Unit = { refreshState() }
         val listener = object : AudioGuardService.OnServiceRebindListener {
             override fun onRebind(monitor: AudioRouteMonitor) {
-                monitor.onStatusChanged = { _ -> refreshState() }
-                monitor.onFixLogUpdated = { refreshState() }
-                monitor.onEnhancedStateChanged = { refreshState() }
+                monitor.addStatusListener(statusListener)
+                monitor.addFixLogListener(fixLogListener)
+                monitor.addEnhancedStateListener(enhancedStateListener)
             }
         }
         val monitor = AudioGuardService.getMonitor()
@@ -172,9 +183,9 @@ private fun AudioGuardScreen() {
         AudioGuardService.addRebindListener(listener)
         onDispose {
             AudioGuardService.removeRebindListener(listener)
-            AudioGuardService.getMonitor()?.onStatusChanged = null
-            AudioGuardService.getMonitor()?.onFixLogUpdated = null
-            AudioGuardService.getMonitor()?.onEnhancedStateChanged = null
+            AudioGuardService.getMonitor()?.removeStatusListener(statusListener)
+            AudioGuardService.getMonitor()?.removeFixLogListener(fixLogListener)
+            AudioGuardService.getMonitor()?.removeEnhancedStateListener(enhancedStateListener)
         }
     }
 
@@ -222,7 +233,9 @@ private fun AudioGuardScreen() {
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .navigationBarsPadding()
+                    .verticalScroll(contentScrollState)
+                    .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
             val toggleDesc = "启用守护。开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行"
@@ -382,6 +395,28 @@ private fun AudioGuardScreen() {
             Text("增强状态：$enhancedStateText", style = MaterialTheme.typography.bodyLarge)
             Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
             Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)
+            heldBluetoothRouteMessage?.let { message ->
+                Text(
+                    message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (canManualReleaseBluetoothRoute) {
+                OutlinedButton(
+                    onClick = {
+                        AudioGuardService.requestReleaseHeldBluetoothRoute(context)
+                        scope.launch {
+                            delay(700)
+                            refreshState()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("尝试解除蓝牙接管")
+                }
+            }
 
             Button(
                 onClick = {

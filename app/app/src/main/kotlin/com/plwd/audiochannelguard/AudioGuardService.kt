@@ -14,6 +14,8 @@ class AudioGuardService : Service() {
     companion object {
         const val CHANNEL_ID = "audio_guard_channel"
         const val NOTIFICATION_ID = 1
+        private const val ACTION_TRY_RELEASE_HELD_BLUETOOTH_ROUTE =
+            "com.plwd.audiochannelguard.action.TRY_RELEASE_HELD_BLUETOOTH_ROUTE"
 
         private var instance: AudioGuardService? = null
         private val rebindListeners = mutableListOf<OnServiceRebindListener>()
@@ -39,6 +41,14 @@ class AudioGuardService : Service() {
         fun stop(context: Context) {
             context.stopService(Intent(context, AudioGuardService::class.java))
         }
+
+        fun requestReleaseHeldBluetoothRoute(context: Context) {
+            context.startForegroundService(
+                Intent(context, AudioGuardService::class.java).apply {
+                    action = ACTION_TRY_RELEASE_HELD_BLUETOOTH_ROUTE
+                }
+            )
+        }
     }
 
     interface OnServiceRebindListener {
@@ -46,6 +56,14 @@ class AudioGuardService : Service() {
     }
 
     private lateinit var monitor: AudioRouteMonitor
+    private val monitorStatusListener: (GuardStatus) -> Unit = { status ->
+        updateNotification(status)
+    }
+    private val monitorEnhancedStateListener: (EnhancedState) -> Unit = {
+        if (::monitor.isInitialized) {
+            updateNotification(monitor.getStatus())
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -60,12 +78,8 @@ class AudioGuardService : Service() {
         monitor = AudioRouteMonitor(this)
         monitor.setEnhancedModeEnabled(AudioGuardApp.isEnhancedModeEnabled(this))
         monitor.setClassicBluetoothWidebandEnabled(AudioGuardApp.isClassicBluetoothWidebandEnabled(this))
-        monitor.onStatusChanged = { status ->
-            updateNotification(status)
-        }
-        monitor.onEnhancedStateChanged = {
-            updateNotification(monitor.getStatus())
-        }
+        monitor.addStatusListener(monitorStatusListener)
+        monitor.addEnhancedStateListener(monitorEnhancedStateListener)
 
         startForeground(NOTIFICATION_ID, buildNotification("声道守护运行中"))
         monitor.start()
@@ -73,7 +87,11 @@ class AudioGuardService : Service() {
     }
 
     override fun onDestroy() {
-        if (::monitor.isInitialized) monitor.stop()
+        if (::monitor.isInitialized) {
+            monitor.removeStatusListener(monitorStatusListener)
+            monitor.removeEnhancedStateListener(monitorEnhancedStateListener)
+            monitor.stop()
+        }
         instance = null
         super.onDestroy()
     }
@@ -88,11 +106,20 @@ class AudioGuardService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (::monitor.isInitialized &&
+            intent?.action == ACTION_TRY_RELEASE_HELD_BLUETOOTH_ROUTE
+        ) {
+            monitor.tryManualReleaseHeldBluetoothRoute("通知栏尝试解除限制")
+            updateNotification(monitor.getStatus())
+        }
         return START_STICKY
     }
 
     private fun updateNotification(status: GuardStatus) {
-        val text = when (monitor.getEnhancedState()) {
+        val heldBluetoothMessage = monitor.getHeldBluetoothRouteMessage()
+        val text = when {
+            heldBluetoothMessage != null -> heldBluetoothMessage
+            else -> when (monitor.getEnhancedState()) {
             EnhancedState.CLEAR_PROBE -> "增强守护观察中"
             EnhancedState.SUSPENDED_BY_CALL -> "增强守护已暂停（通话中）"
             EnhancedState.WAITING_HEADSET ->
@@ -108,6 +135,7 @@ class AudioGuardService : Service() {
             }
 
             EnhancedState.DISABLED -> defaultStatusText(status)
+        }
         }
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(text))
@@ -130,19 +158,32 @@ class AudioGuardService : Service() {
     }
 
     private fun buildNotification(text: String): Notification {
-        val intent = Intent(this, MainActivity::class.java).apply {
+        val contentIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
+        val pendingContentIntent = PendingIntent.getActivity(
+            this, 0, contentIntent, PendingIntent.FLAG_IMMUTABLE
         )
 
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_headset)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(pendingContentIntent)
             .setOngoing(true)
-            .build()
+
+        if (::monitor.isInitialized && monitor.canManuallyReleaseHeldBluetoothRoute()) {
+            val actionIntent = PendingIntent.getService(
+                this,
+                1,
+                Intent(this, AudioGuardService::class.java).apply {
+                    action = ACTION_TRY_RELEASE_HELD_BLUETOOTH_ROUTE
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            builder.addAction(R.drawable.ic_headset, "尝试解除限制", actionIntent)
+        }
+
+        return builder.build()
     }
 }
