@@ -35,6 +35,7 @@ class AudioRouteMonitor(private val context: Context) {
         IDLE,
         CLEAR_PROBE,
         RECOVERY_WINDOW,
+        RELEASE_PROBE,
     }
 
     companion object {
@@ -70,6 +71,8 @@ class AudioRouteMonitor(private val context: Context) {
         private const val MODE_REACQUIRE_DELAY_MS = 250L
         private const val RECOVERY_POLL_MS = 500L
         private const val RECOVERY_WINDOW_MS = 6000L
+        private const val RELEASE_PROBE_POLL_MS = 100L
+        private const val RELEASE_PROBE_WINDOW_MS = 500L
         private const val REQUIRED_STABLE_HITS = 3
         private const val CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS = 8000L
         private val CLASSIC_BLUETOOTH_WIDEBAND_RETRY_DELAYS_MS = longArrayOf(250L, 1200L)
@@ -85,13 +88,16 @@ class AudioRouteMonitor(private val context: Context) {
     private var lastReportedStatus = GuardStatus.NO_HEADSET
     private var clearProbeDeadlineMs = 0L
     private var recoveryDeadlineMs = 0L
+    private var releaseProbeDeadlineMs = 0L
     private var stableHitCount = 0
     private var clearProbeHeadset: AudioDeviceInfo? = null
+    private var releaseProbeHeadset: AudioDeviceInfo? = null
     private var enhancedModeEnabled = false
     private var enhancedState = EnhancedState.DISABLED
     private var classicBluetoothWidebandEnabled = false
     private var modeListenerRegistered = false
     private var modeRequestedByEnhanced = false
+    private var guardOwnsCommunicationDevice = false
     private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
 
     private val pollingRunnable = object : Runnable {
@@ -102,6 +108,7 @@ class AudioRouteMonitor(private val context: Context) {
                 PollingMode.IDLE -> return
                 PollingMode.CLEAR_PROBE -> handleClearProbeTick()
                 PollingMode.RECOVERY_WINDOW -> handleRecoveryWindowTick()
+                PollingMode.RELEASE_PROBE -> handleReleaseProbeTick()
             }
         }
     }
@@ -131,24 +138,29 @@ class AudioRouteMonitor(private val context: Context) {
             if (shouldSuspendForCall(mode)) {
                 handler.removeCallbacks(reacquireEnhancedRunnable)
                 stopClearProbe("检测到电话模式")
+                stopReleaseProbe("检测到电话模式")
                 if (enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
                     addLog("检测到电话模式，暂停增强守护")
                 }
-                modeRequestedByEnhanced = false
+                if (hasGuardCommunicationHold()) {
+                    clearCommunicationDeviceSafely()
+                    tryLeaveCommunicationMode("检测到电话模式")
+                }
                 updateEnhancedState(EnhancedState.SUSPENDED_BY_CALL)
                 return@OnModeChangedListener
             }
 
-            if (findConnectedHeadset() == null) {
+            val headset = findConnectedHeadset()
+            if (headset == null) {
                 updateEnhancedState(EnhancedState.WAITING_HEADSET)
                 return@OnModeChangedListener
             }
 
-            if (mode != AudioManager.MODE_IN_COMMUNICATION || enhancedState == EnhancedState.SUSPENDED_BY_CALL) {
+            if (modeRequestedByEnhanced && mode != AudioManager.MODE_IN_COMMUNICATION) {
                 handler.removeCallbacks(reacquireEnhancedRunnable)
                 handler.postDelayed(reacquireEnhancedRunnable, MODE_REACQUIRE_DELAY_MS)
-            } else if (pollingMode == PollingMode.IDLE) {
-                updateEnhancedState(EnhancedState.ACTIVE)
+            } else if (pollingMode == PollingMode.IDLE || enhancedState == EnhancedState.SUSPENDED_BY_CALL) {
+                refreshEnhancedObservationState("音频模式变化后更新监听状态", headset)
             }
         }
 
@@ -164,13 +176,14 @@ class AudioRouteMonitor(private val context: Context) {
                 return@OnCommunicationDeviceChangedListener
             }
 
-            if (pollingMode == PollingMode.CLEAR_PROBE && device == null) {
+            if (device == null && pollingMode != PollingMode.IDLE) {
                 return@OnCommunicationDeviceChangedListener
             }
 
             if (device?.type in BUILTIN_TYPES) {
                 if (enhancedModeEnabled) {
-                    startClearProbe(headset, "检测到声道被劫持到${builtinDeviceName(device?.type)}")
+                    val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
+                    handleEnhancedBuiltinRouteDetected(headset, builtInDevice)
                 } else {
                     restoreCommunicationToHeadset(
                         preferredOutputDevice = headset,
@@ -192,7 +205,7 @@ class AudioRouteMonitor(private val context: Context) {
             if (headset != null) {
                 addLog("耳机已连接: ${headset.productName}")
                 if (enhancedModeEnabled) {
-                    maybeReacquireEnhancedMode("检测到耳机接入")
+                    refreshEnhancedObservationState("检测到耳机接入", headset)
                     return
                 }
 
@@ -217,6 +230,7 @@ class AudioRouteMonitor(private val context: Context) {
                 if (findConnectedHeadset() == null) {
                     stopClearProbe("耳机全部断开")
                     stopRecoveryWindow("耳机全部断开")
+                    stopReleaseProbe("耳机全部断开")
                     classicBluetoothWidebandAttemptTimesMs.clear()
                     clearCommunicationDeviceSafely()
                     if (enhancedModeEnabled) {
@@ -311,8 +325,16 @@ class AudioRouteMonitor(private val context: Context) {
         if (isStable) {
             stableHitCount++
             if (stableHitCount >= REQUIRED_STABLE_HITS) {
-                stopRecoveryWindow("路由已连续稳定 $REQUIRED_STABLE_HITS 次")
-                reportStatus(GuardStatus.NORMAL)
+                val reason = "路由已连续稳定 $REQUIRED_STABLE_HITS 次"
+                if (hasGuardCommunicationHold()) {
+                    startReleaseProbe(headset, reason)
+                } else {
+                    stopRecoveryWindow(reason)
+                    if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                        updateEnhancedState(EnhancedState.ACTIVE)
+                    }
+                    reportStatus(GuardStatus.NORMAL)
+                }
                 return
             }
         } else {
@@ -320,6 +342,62 @@ class AudioRouteMonitor(private val context: Context) {
         }
 
         handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
+    }
+
+    private fun handleReleaseProbeTick() {
+        if (pollingMode != PollingMode.RELEASE_PROBE) return
+
+        val headset = releaseProbeHeadset ?: findConnectedHeadset()
+        if (headset == null) {
+            stopReleaseProbe("归还观察期间未检测到耳机")
+            if (enhancedModeEnabled) {
+                updateEnhancedState(EnhancedState.WAITING_HEADSET)
+            }
+            reportStatus(GuardStatus.NO_HEADSET)
+            return
+        }
+
+        val commDevice = audioManager.communicationDevice
+        if (commDevice?.type in BUILTIN_TYPES) {
+            stopReleaseProbe("归还后仍停留在${builtinDeviceName(commDevice?.type)}")
+            if (enhancedModeEnabled) {
+                tryEnterCommunicationMode("归还系统后检测到劫持再次出现")
+            }
+            val fixed = restoreCommunicationToHeadset(
+                preferredOutputDevice = headset,
+                reason = "归还系统后仍被劫持到${builtinDeviceName(commDevice?.type)}，重新接管到耳机"
+            )
+            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                updateEnhancedState(EnhancedState.ACTIVE)
+            }
+            if (fixed) {
+                startRecoveryWindow("归还系统后仍存在劫持，重新接管")
+            }
+            return
+        }
+
+        val communicationHeadset = findAvailableCommunicationHeadset(headset)
+        val routedToHeadset =
+            commDevice != null && communicationHeadset != null && isSamePhysicalDevice(commDevice, communicationHeadset)
+        if (routedToHeadset) {
+            stopReleaseProbe("系统已接管到耳机")
+            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                updateEnhancedState(EnhancedState.ACTIVE)
+            }
+            reportStatus(GuardStatus.NORMAL)
+            return
+        }
+
+        if (System.currentTimeMillis() >= releaseProbeDeadlineMs) {
+            stopReleaseProbe("归还系统后未再检测到劫持")
+            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                updateEnhancedState(EnhancedState.ACTIVE)
+            }
+            reportStatus(GuardStatus.NORMAL)
+            return
+        }
+
+        handler.postDelayed(pollingRunnable, RELEASE_PROBE_POLL_MS)
     }
 
     private fun startClearProbe(preferredHeadset: AudioDeviceInfo?, reason: String) {
@@ -334,6 +412,7 @@ class AudioRouteMonitor(private val context: Context) {
         }
 
         stopRecoveryWindow("切换到增强观察模式")
+        stopReleaseProbe("切换到增强观察模式")
         clearProbeHeadset = headset
         clearProbeDeadlineMs = System.currentTimeMillis() + CLEAR_PROBE_WINDOW_MS
         pollingMode = PollingMode.CLEAR_PROBE
@@ -372,6 +451,47 @@ class AudioRouteMonitor(private val context: Context) {
         addLog("退出恢复观察窗口: $reason")
     }
 
+    private fun startReleaseProbe(preferredHeadset: AudioDeviceInfo?, reason: String) {
+        if (!running) return
+        if (!hasGuardCommunicationHold()) {
+            stopRecoveryWindow("无需归还系统")
+            reportStatus(GuardStatus.NORMAL)
+            return
+        }
+
+        val headset = preferredHeadset ?: findConnectedHeadset()
+        if (headset == null) {
+            stopRecoveryWindow("归还系统前未检测到耳机")
+            if (enhancedModeEnabled) {
+                updateEnhancedState(EnhancedState.WAITING_HEADSET)
+            }
+            reportStatus(GuardStatus.NO_HEADSET)
+            return
+        }
+
+        stopClearProbe("切换到归还系统观察")
+        stopRecoveryWindow("切换到归还系统观察")
+        releaseProbeHeadset = headset
+        releaseProbeDeadlineMs = System.currentTimeMillis() + RELEASE_PROBE_WINDOW_MS
+        pollingMode = PollingMode.RELEASE_PROBE
+        addLog("$reason，尝试归还系统并观察是否仍存在劫持")
+        clearCommunicationDeviceSafely()
+        if (enhancedModeEnabled) {
+            tryLeaveCommunicationMode("$reason，尝试归还系统")
+        }
+        reportStatus(GuardStatus.NORMAL)
+        handler.removeCallbacks(pollingRunnable)
+        handler.post(pollingRunnable)
+    }
+
+    private fun stopReleaseProbe(reason: String) {
+        if (pollingMode != PollingMode.RELEASE_PROBE) return
+        pollingMode = PollingMode.IDLE
+        releaseProbeHeadset = null
+        handler.removeCallbacks(pollingRunnable)
+        addLog("退出归还观察: $reason")
+    }
+
     fun start() {
         if (running) return
         running = true
@@ -392,7 +512,7 @@ class AudioRouteMonitor(private val context: Context) {
             }
             reportStatus(GuardStatus.NO_HEADSET)
         } else if (enhancedModeEnabled) {
-            maybeReacquireEnhancedMode("增强守护启动")
+            refreshEnhancedObservationState("增强守护启动", headset)
         } else if (audioManager.communicationDevice?.type in BUILTIN_TYPES) {
             restoreCommunicationToHeadset(
                 preferredOutputDevice = headset,
@@ -410,6 +530,7 @@ class AudioRouteMonitor(private val context: Context) {
         handler.removeCallbacks(reacquireEnhancedRunnable)
         stopClearProbe("守护停止")
         stopRecoveryWindow("守护停止")
+        stopReleaseProbe("守护停止")
         unregisterModeListenerIfNeeded()
         tryLeaveCommunicationMode("守护停止")
         classicBluetoothWidebandAttemptTimesMs.clear()
@@ -437,7 +558,7 @@ class AudioRouteMonitor(private val context: Context) {
     fun setEnhancedModeEnabled(enabled: Boolean) {
         if (enhancedModeEnabled == enabled) {
             if (running && enabled) {
-                maybeReacquireEnhancedMode("增强守护配置已同步")
+                refreshEnhancedObservationState("增强守护配置已同步")
             }
             return
         }
@@ -450,12 +571,15 @@ class AudioRouteMonitor(private val context: Context) {
 
         if (enabled) {
             registerModeListenerIfNeeded()
-            maybeReacquireEnhancedMode("增强守护已开启")
+            refreshEnhancedObservationState("增强守护已开启")
         } else {
             handler.removeCallbacks(reacquireEnhancedRunnable)
             stopClearProbe("增强守护已关闭")
+            stopRecoveryWindow("增强守护已关闭")
+            stopReleaseProbe("增强守护已关闭")
             unregisterModeListenerIfNeeded()
             tryLeaveCommunicationMode("增强守护已关闭")
+            clearCommunicationDeviceSafely()
             updateEnhancedState(EnhancedState.DISABLED)
         }
     }
@@ -524,8 +648,71 @@ class AudioRouteMonitor(private val context: Context) {
         modeListenerRegistered = false
     }
 
-    private fun maybeReacquireEnhancedMode(reason: String) {
+    private fun refreshEnhancedObservationState(
+        reason: String,
+        preferredHeadset: AudioDeviceInfo? = null,
+    ) {
         if (!running || !enhancedModeEnabled) return
+
+        if (shouldSuspendForCall(audioManager.mode)) {
+            updateEnhancedState(EnhancedState.SUSPENDED_BY_CALL)
+            return
+        }
+
+        val headset = preferredHeadset ?: findConnectedHeadset()
+        if (headset == null) {
+            updateEnhancedState(EnhancedState.WAITING_HEADSET)
+            reportStatus(GuardStatus.NO_HEADSET)
+            return
+        }
+
+        val commDevice = audioManager.communicationDevice
+        if (commDevice?.type in BUILTIN_TYPES) {
+            startClearProbe(headset, "$reason，检测到声道在${builtinDeviceName(commDevice?.type)}")
+            return
+        }
+
+        if (pollingMode == PollingMode.IDLE) {
+            updateEnhancedState(EnhancedState.ACTIVE)
+        }
+        reportStatus(GuardStatus.NORMAL)
+    }
+
+    private fun handleEnhancedBuiltinRouteDetected(
+        headset: AudioDeviceInfo,
+        builtInDevice: AudioDeviceInfo,
+    ) {
+        val builtInName = builtinDeviceName(builtInDevice.type)
+        when (pollingMode) {
+            PollingMode.RECOVERY_WINDOW -> {
+                stableHitCount = 0
+                restoreCommunicationToHeadset(
+                    preferredOutputDevice = headset,
+                    reason = "恢复观察窗口内检测到声道再次被劫持到$builtInName，立即恢复到耳机"
+                )
+            }
+
+            PollingMode.RELEASE_PROBE -> {
+                stopReleaseProbe("归还系统后回调检测到劫持再次出现")
+                tryEnterCommunicationMode("归还系统后回调检测到劫持再次出现")
+                val fixed = restoreCommunicationToHeadset(
+                    preferredOutputDevice = headset,
+                    reason = "归还系统后仍被劫持到$builtInName，重新接管到耳机"
+                )
+                if (enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                    updateEnhancedState(EnhancedState.ACTIVE)
+                }
+                if (fixed) {
+                    startRecoveryWindow("归还系统后回调检测到劫持，重新接管")
+                }
+            }
+
+            else -> startClearProbe(headset, "检测到声道被劫持到$builtInName")
+        }
+    }
+
+    private fun maybeReacquireEnhancedMode(reason: String) {
+        if (!running || !enhancedModeEnabled || !hasGuardCommunicationHold()) return
 
         if (shouldSuspendForCall(audioManager.mode)) {
             updateEnhancedState(EnhancedState.SUSPENDED_BY_CALL)
@@ -645,11 +832,13 @@ class AudioRouteMonitor(private val context: Context) {
 
     private fun setCommunicationDeviceSafely(device: AudioDeviceInfo): Boolean {
         return try {
+            val previousCommunicationDevice = audioManager.communicationDevice
             val result = audioManager.setCommunicationDevice(device)
             if (result) {
+                guardOwnsCommunicationDevice = true
                 addLog("已将声道恢复到 ${device.productName}")
                 reportStatus(GuardStatus.FIXED)
-                maybeApplyClassicBluetoothWidebandHint(device)
+                maybeApplyClassicBluetoothWidebandHint(device, previousCommunicationDevice)
             } else {
                 addLog("系统未接受通信设备切换请求: ${device.productName}")
                 reportStatus(GuardStatus.HIJACKED)
@@ -671,8 +860,17 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     // This parameter is platform-dependent; treat it as a best-effort hint only.
-    private fun maybeApplyClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo) {
-        if (!running || !classicBluetoothWidebandEnabled || !isClassicBluetoothDevice(targetDevice)) {
+    private fun maybeApplyClassicBluetoothWidebandHint(
+        targetDevice: AudioDeviceInfo,
+        previousCommunicationDevice: AudioDeviceInfo?,
+    ) {
+        if (
+            !running ||
+            !classicBluetoothWidebandEnabled ||
+            !isClassicBluetoothDevice(targetDevice) ||
+            shouldSuspendForCall(audioManager.mode) ||
+            !shouldAttemptClassicBluetoothWidebandHint(previousCommunicationDevice, targetDevice)
+        ) {
             return
         }
 
@@ -696,7 +894,12 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun retryClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo, delayMs: Long) {
-        if (!running || !classicBluetoothWidebandEnabled || !isClassicBluetoothDevice(targetDevice)) {
+        if (
+            !running ||
+            !classicBluetoothWidebandEnabled ||
+            !isClassicBluetoothDevice(targetDevice) ||
+            shouldSuspendForCall(audioManager.mode)
+        ) {
             return
         }
 
@@ -723,6 +926,15 @@ class AudioRouteMonitor(private val context: Context) {
             device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
     }
 
+    private fun shouldAttemptClassicBluetoothWidebandHint(
+        previousCommunicationDevice: AudioDeviceInfo?,
+        targetDevice: AudioDeviceInfo,
+    ): Boolean {
+        if (previousCommunicationDevice == null) return true
+        if (previousCommunicationDevice.type in BUILTIN_TYPES) return true
+        return !isSamePhysicalDevice(previousCommunicationDevice, targetDevice)
+    }
+
     private fun classicBluetoothWidebandAttemptKey(device: AudioDeviceInfo): String {
         val address = device.address.orEmpty()
         if (address.isNotEmpty()) {
@@ -734,11 +946,16 @@ class AudioRouteMonitor(private val context: Context) {
     private fun clearCommunicationDeviceSafely() {
         try {
             audioManager.clearCommunicationDevice()
+            guardOwnsCommunicationDevice = false
         } catch (exception: IllegalStateException) {
             Log.w(TAG, "clearCommunicationDevice failed", exception)
         } catch (exception: SecurityException) {
             Log.w(TAG, "clearCommunicationDevice failed", exception)
         }
+    }
+
+    private fun hasGuardCommunicationHold(): Boolean {
+        return guardOwnsCommunicationDevice || modeRequestedByEnhanced
     }
 
     private fun builtinDeviceName(type: Int?): String {
