@@ -109,9 +109,10 @@ private fun AudioGuardScreen() {
 
     // 检查是否需要显示权限引导
     LaunchedEffect(Unit) {
-        val batteryStatus = PermissionChecker.checkBatteryOptimization(context)
-        showPermissionWarning = !batteryStatus.isGranted
-        if (!batteryStatus.isGranted) {
+        val allStatus = PermissionChecker.checkAllPermissions(context)
+        val hasMissing = allStatus.any { !it.isGranted }
+        showPermissionWarning = hasMissing
+        if (hasMissing) {
             showPermissionGuide = true
         }
     }
@@ -141,7 +142,7 @@ private fun AudioGuardScreen() {
         } else {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
-                    showPermissionWarning = !PermissionChecker.checkBatteryOptimization(context).isGranted
+                    showPermissionWarning = PermissionChecker.checkAllPermissions(context).any { !it.isGranted }
                     tileAdded = AudioGuardApp.isTileAdded(context)
                     refreshState()
                 }

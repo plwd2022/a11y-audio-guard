@@ -23,12 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
 private fun hasMissingCriticalPermissions(statusList: List<PermissionStatus>): Boolean {
-    return statusList
-        .filter {
-            it.type == PermissionType.BATTERY_OPTIMIZATION ||
-                it.type == PermissionType.NOTIFICATION
-        }
-        .any { !it.isGranted }
+    return statusList.any { !it.isGranted }
 }
 
 /**
@@ -49,6 +44,9 @@ fun PermissionGuideDialog(
         mutableStateOf(hasMissingCriticalPermissions(initialStatus))
     }
     var showManufacturerGuide by remember { mutableStateOf(false) }
+    // 记录用户正在配置哪个权限（跳转到系统设置后，返回时用来判断是否需要手动确认）
+    var pendingManualConfirmType by remember { mutableStateOf<PermissionType?>(null) }
+    var showManualConfirmDialog by remember { mutableStateOf(false) }
 
     fun allCriticalGranted(statusList: List<PermissionStatus>): Boolean {
         return !hasMissingCriticalPermissions(statusList)
@@ -68,8 +66,14 @@ fun PermissionGuideDialog(
                 if (event == Lifecycle.Event.ON_RESUME) {
                     val latestStatus = PermissionChecker.checkAllPermissions(context)
                     permissionStatus = latestStatus
-                    if (hadMissingCritical && allCriticalGranted(latestStatus)) {
-                        onAllPermissionsGranted()
+                    // 如果用户刚从自启动或后台限制设置页返回，弹出手动确认
+                    val pending = pendingManualConfirmType
+                    if (pending == PermissionType.AUTO_START || pending == PermissionType.BACKGROUND_RESTRICT) {
+                        showManualConfirmDialog = true
+                    } else {
+                        if (hadMissingCritical && allCriticalGranted(latestStatus)) {
+                            onAllPermissionsGranted()
+                        }
                     }
                 }
             }
@@ -78,6 +82,47 @@ fun PermissionGuideDialog(
                 activity.lifecycle.removeObserver(observer)
             }
         }
+    }
+
+    // 手动确认对话框
+    if (showManualConfirmDialog && pendingManualConfirmType != null) {
+        val confirmTitle = when (pendingManualConfirmType) {
+            PermissionType.AUTO_START -> "自启动权限"
+            PermissionType.BACKGROUND_RESTRICT -> "后台运行权限"
+            else -> ""
+        }
+        AlertDialog(
+            onDismissRequest = {
+                showManualConfirmDialog = false
+                pendingManualConfirmType = null
+            },
+            title = { Text(confirmTitle) },
+            text = { Text("是否已在系统设置中完成配置？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (pendingManualConfirmType) {
+                        PermissionType.AUTO_START ->
+                            AudioGuardApp.setAutoStartConfirmed(context, true)
+                        PermissionType.BACKGROUND_RESTRICT ->
+                            AudioGuardApp.setBgRestrictConfirmed(context, true)
+                        else -> {}
+                    }
+                    showManualConfirmDialog = false
+                    pendingManualConfirmType = null
+                    val latestStatus = PermissionChecker.checkAllPermissions(context)
+                    permissionStatus = latestStatus
+                    if (hadMissingCritical && allCriticalGranted(latestStatus)) {
+                        onAllPermissionsGranted()
+                    }
+                }) { Text("已完成") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showManualConfirmDialog = false
+                    pendingManualConfirmType = null
+                }) { Text("尚未完成") }
+            }
+        )
     }
     
     Dialog(
@@ -121,14 +166,21 @@ fun PermissionGuideDialog(
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     items(permissionStatus) { status ->
+                        val isManualConfirmType = status.type == PermissionType.AUTO_START ||
+                            status.type == PermissionType.BACKGROUND_RESTRICT
                         PermissionItem(
                             status = status,
+                            // 手动确认类型即使已确认也允许点击重新设置
+                            clickable = !status.isGranted || isManualConfirmType,
                             onClick = {
-                                if (!status.isGranted && status.actionIntent != null) {
+                                if (status.actionIntent != null) {
+                                    // 记录正在配置的权限类型
+                                    if (isManualConfirmType) {
+                                        pendingManualConfirmType = status.type
+                                    }
                                     try {
                                         context.startActivity(status.actionIntent)
                                     } catch (e: Exception) {
-                                        // 如果无法打开特定设置，跳转到应用详情
                                         val fallbackIntent = Intent(
                                             android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS
                                         ).apply {
@@ -182,8 +234,18 @@ fun PermissionGuideDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onDismiss) {
-                        Text("稍后再说")
+                    TextButton(onClick = {
+                        // 将自启动和后台限制标记为已手动确认
+                        AudioGuardApp.setAutoStartConfirmed(context, true)
+                        AudioGuardApp.setBgRestrictConfirmed(context, true)
+                        val latestStatus = PermissionChecker.checkAllPermissions(context)
+                        permissionStatus = latestStatus
+                        if (hadMissingCritical && allCriticalGranted(latestStatus)) {
+                            onAllPermissionsGranted()
+                        }
+                        onDismiss()
+                    }) {
+                        Text("手动确认")
                     }
                     
                     Spacer(modifier = Modifier.width(8.dp))
@@ -212,22 +274,23 @@ fun PermissionGuideDialog(
 @Composable
 private fun PermissionItem(
     status: PermissionStatus,
+    clickable: Boolean = !status.isGranted,
     onClick: () -> Unit
 ) {
     val backgroundColor = when {
         status.isGranted -> MaterialTheme.colorScheme.primaryContainer
         else -> MaterialTheme.colorScheme.errorContainer
     }
-    
+
     val contentColor = when {
         status.isGranted -> MaterialTheme.colorScheme.onPrimaryContainer
         else -> MaterialTheme.colorScheme.onErrorContainer
     }
-    
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(enabled = !status.isGranted, onClick = onClick),
+            .clickable(enabled = clickable, onClick = onClick),
         color = backgroundColor,
         shape = MaterialTheme.shapes.medium
     ) {
@@ -248,9 +311,9 @@ private fun PermissionItem(
                 tint = contentColor,
                 modifier = Modifier.size(24.dp)
             )
-            
+
             Spacer(modifier = Modifier.width(12.dp))
-            
+
             // 文字内容
             Column(modifier = Modifier.weight(1f)) {
                 Text(
@@ -266,14 +329,14 @@ private fun PermissionItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            
+
             // 操作提示
-            if (!status.isGranted) {
+            if (clickable) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "去设置",
+                    text = if (status.isGranted) "重新设置" else "去设置",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = if (status.isGranted) contentColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.primary
                 )
             }
         }

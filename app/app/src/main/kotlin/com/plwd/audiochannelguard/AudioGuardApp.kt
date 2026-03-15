@@ -18,6 +18,8 @@ class AudioGuardApp : Application() {
         private const val KEY_ENABLED = "guard_enabled"
         private const val KEY_ENHANCED_MODE = "enhanced_mode"
         private const val KEY_TILE_ADDED = "tile_added"
+        private const val KEY_AUTO_START_CONFIRMED = "auto_start_confirmed"
+        private const val KEY_BG_RESTRICT_CONFIRMED = "bg_restrict_confirmed"
 
         // Release keystore (plwd_cn.keystore) signing certificate SHA-256
         private const val EXPECTED_CERT_HASH =
@@ -60,6 +62,26 @@ class AudioGuardApp : Application() {
         fun setTileAdded(context: Context, added: Boolean) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_TILE_ADDED, added).apply()
+        }
+
+        fun isAutoStartConfirmed(context: Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_AUTO_START_CONFIRMED, false)
+        }
+
+        fun setAutoStartConfirmed(context: Context, confirmed: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_AUTO_START_CONFIRMED, confirmed).apply()
+        }
+
+        fun isBgRestrictConfirmed(context: Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_BG_RESTRICT_CONFIRMED, false)
+        }
+
+        fun setBgRestrictConfirmed(context: Context, confirmed: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_BG_RESTRICT_CONFIRMED, confirmed).apply()
         }
     }
 
