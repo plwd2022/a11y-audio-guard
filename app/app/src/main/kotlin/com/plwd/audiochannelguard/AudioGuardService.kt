@@ -98,7 +98,7 @@ class AudioGuardService : Service() {
                 if (monitor.isEnhancedModeEnabled()) "增强守护等待耳机" else defaultStatusText(status)
 
             EnhancedState.ACTIVE -> {
-                if (status == GuardStatus.FIXED) {
+                if (status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
                     val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
                     "增强守护中，已恢复到 $deviceName"
                 } else {
@@ -118,6 +118,10 @@ class AudioGuardService : Service() {
             GuardStatus.FIXED -> {
                 val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
                 "已将声道恢复到 $deviceName"
+            }
+            GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> {
+                val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
+                "已恢复到 $deviceName，其他应用可能仍占用扬声器路由"
             }
             GuardStatus.HIJACKED -> "检测到声道仍在内置设备"
             GuardStatus.NO_HEADSET -> "未检测到耳机"

@@ -313,10 +313,18 @@ private fun AudioGuardScreen() {
             val statusText = when (status) {
                 GuardStatus.NORMAL -> "正常"
                 GuardStatus.FIXED -> "已修复"
+                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已修复（其他应用可能仍占用扬声器路由）"
                 GuardStatus.HIJACKED -> "待修复"
                 GuardStatus.NO_HEADSET -> "无耳机"
             }
             Text("当前状态：$statusText", style = MaterialTheme.typography.bodyLarge)
+            if (status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
+                Text(
+                    "如使用正常请忽略，如仍有异常请点击手动触发",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Text("增强状态：$enhancedStateText", style = MaterialTheme.typography.bodyLarge)
             Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
             Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)

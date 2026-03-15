@@ -16,6 +16,7 @@ data class FixEvent(
 enum class GuardStatus {
     NORMAL,
     FIXED,
+    FIXED_BUT_SPEAKER_ROUTE,
     NO_HEADSET,
     HIJACKED
 }
@@ -462,8 +463,14 @@ class AudioRouteMonitor(private val context: Context) {
         val headset = findConnectedHeadset()
         if (headset == null) return GuardStatus.NO_HEADSET
         val commDevice = audioManager.communicationDevice
-        return if (pollingMode == PollingMode.CLEAR_PROBE || commDevice?.type in BUILTIN_TYPES) {
+        return if (pollingMode == PollingMode.CLEAR_PROBE) {
             GuardStatus.HIJACKED
+        } else if (commDevice?.type in BUILTIN_TYPES) {
+            if (lastReportedStatus == GuardStatus.FIXED && pollingMode == PollingMode.IDLE) {
+                GuardStatus.FIXED_BUT_SPEAKER_ROUTE
+            } else {
+                GuardStatus.HIJACKED
+            }
         } else if (lastReportedStatus == GuardStatus.FIXED) {
             GuardStatus.FIXED
         } else {
