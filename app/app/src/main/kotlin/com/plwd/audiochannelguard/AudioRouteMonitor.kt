@@ -6,6 +6,7 @@ import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 
 data class FixEvent(
@@ -33,6 +34,7 @@ class AudioRouteMonitor(private val context: Context) {
 
     private enum class PollingMode {
         IDLE,
+        CLASSIC_BLUETOOTH_CONFIRM,
         CLEAR_PROBE,
         RECOVERY_WINDOW,
         RELEASE_PROBE,
@@ -68,12 +70,21 @@ class AudioRouteMonitor(private val context: Context) {
 
         private const val CLEAR_PROBE_POLL_MS = 100L
         private const val CLEAR_PROBE_WINDOW_MS = 200L
+        private const val CLASSIC_BLUETOOTH_CONFIRM_POLL_MS = 300L
+        private const val CLASSIC_BLUETOOTH_CONFIRM_WINDOW_MS = 900L
+        private const val CLASSIC_BLUETOOTH_CONFIRM_REQUIRED_HITS = 3
+        private const val CLASSIC_BLUETOOTH_PASSIVE_OBSERVE_LOG_COOLDOWN_MS = 5000L
         private const val MODE_REACQUIRE_DELAY_MS = 250L
         private const val RECOVERY_POLL_MS = 500L
         private const val RECOVERY_WINDOW_MS = 6000L
         private const val RELEASE_PROBE_POLL_MS = 100L
         private const val RELEASE_PROBE_WINDOW_MS = 500L
         private const val REQUIRED_STABLE_HITS = 3
+        private const val RESTORE_REQUEST_DEBOUNCE_MS = 350L
+        private const val SOFT_GUARD_VERIFY_DELAY_MS = 450L
+        private const val SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS = 1500L
+        private const val SOFT_GUARD_HIJACK_EVIDENCE_WINDOW_MS = 3000L
+        private const val SOFT_GUARD_PASSIVE_SKIP_LOG_COOLDOWN_MS = 5000L
         private const val CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS = 8000L
         private val CLASSIC_BLUETOOTH_WIDEBAND_RETRY_DELAYS_MS = longArrayOf(250L, 1200L)
         private const val CLASSIC_BLUETOOTH_WIDEBAND_HINT = "hfp_set_sampling_rate=16000"
@@ -82,6 +93,10 @@ class AudioRouteMonitor(private val context: Context) {
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val handler = Handler(Looper.getMainLooper())
+    private val classicBluetoothSoftGuard = AccessibilitySoftRouteGuard(
+        callbackHandler = handler,
+        onRoutedDeviceChanged = ::handleClassicBluetoothSoftGuardRouteChanged
+    )
     private var running = false
 
     private var pollingMode = PollingMode.IDLE
@@ -91,9 +106,15 @@ class AudioRouteMonitor(private val context: Context) {
     private var releaseProbeDeadlineMs = 0L
     private var stableHitCount = 0
     private var clearProbeHeadset: AudioDeviceInfo? = null
+    private var classicBluetoothConfirmHeadset: AudioDeviceInfo? = null
+    private var classicBluetoothConfirmReason: String? = null
+    private var classicBluetoothConfirmBuiltInType: Int? = null
+    private var classicBluetoothConfirmHitCount = 0
+    private var classicBluetoothConfirmDeadlineMs = 0L
     private var releaseProbeHeadset: AudioDeviceInfo? = null
     private var enhancedModeEnabled = false
     private var enhancedState = EnhancedState.DISABLED
+    private var classicBluetoothSoftGuardEnabled = false
     private var classicBluetoothWidebandEnabled = false
     private var modeListenerRegistered = false
     private var modeRequestedByEnhanced = false
@@ -101,10 +122,20 @@ class AudioRouteMonitor(private val context: Context) {
     private var classicBluetoothStickyHoldActive = false
     private var classicBluetoothManualReleaseInProgress = false
     private var classicBluetoothHoldMessage: String? = null
+    private var lastRestoreAttemptDeviceKey: String? = null
+    private var lastRestoreAttemptAtElapsedMs = 0L
+    private var classicBluetoothSoftGuardStartedAtElapsedMs = 0L
+    private var lastSoftGuardEscalationAtElapsedMs = 0L
+    private var lastBuiltinRouteEvidenceAtElapsedMs = 0L
+    private var lastClassicBluetoothPassiveObserveLoggedAtElapsedMs = 0L
+    private var lastSoftGuardPassiveSkipLoggedAtElapsedMs = 0L
     private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
     private val statusListeners = linkedSetOf<(GuardStatus) -> Unit>()
     private val fixLogListeners = linkedSetOf<() -> Unit>()
     private val enhancedStateListeners = linkedSetOf<(EnhancedState) -> Unit>()
+    private val classicBluetoothSoftGuardVerificationRunnable = Runnable {
+        evaluateClassicBluetoothSoftGuardRoute("经典蓝牙保真守护自检")
+    }
 
     private val pollingRunnable = object : Runnable {
         override fun run() {
@@ -112,6 +143,7 @@ class AudioRouteMonitor(private val context: Context) {
 
             when (pollingMode) {
                 PollingMode.IDLE -> return
+                PollingMode.CLASSIC_BLUETOOTH_CONFIRM -> handleClassicBluetoothConfirmTick()
                 PollingMode.CLEAR_PROBE -> handleClearProbeTick()
                 PollingMode.RECOVERY_WINDOW -> handleRecoveryWindowTick()
                 PollingMode.RELEASE_PROBE -> handleReleaseProbeTick()
@@ -178,6 +210,7 @@ class AudioRouteMonitor(private val context: Context) {
                     tryLeaveCommunicationMode("检测到电话模式")
                 }
                 updateEnhancedState(EnhancedState.SUSPENDED_BY_CALL)
+                syncClassicBluetoothSoftGuard("检测到电话模式")
                 return@OnModeChangedListener
             }
 
@@ -193,6 +226,7 @@ class AudioRouteMonitor(private val context: Context) {
             } else if (pollingMode == PollingMode.IDLE || enhancedState == EnhancedState.SUSPENDED_BY_CALL) {
                 refreshEnhancedObservationState("音频模式变化后更新监听状态", headset)
             }
+            syncClassicBluetoothSoftGuard("音频模式变化后更新保真守护")
         }
 
     private val commDeviceListener =
@@ -200,6 +234,8 @@ class AudioRouteMonitor(private val context: Context) {
             Log.i(TAG, "Communication device changed: type=${device?.type} name=${device?.productName}")
             val headset = findConnectedHeadset()
             if (headset == null) {
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("耳机不可用", announce = false)
                 if (enhancedModeEnabled) {
                     updateEnhancedState(EnhancedState.WAITING_HEADSET)
                 }
@@ -213,14 +249,24 @@ class AudioRouteMonitor(private val context: Context) {
 
             if (device?.type in BUILTIN_TYPES) {
                 if (pollingMode == PollingMode.RELEASE_PROBE) {
+                    rememberBuiltinRouteEvidence(device?.type)
                     val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
                     handleReleaseProbeBuiltinRouteDetected(headset, builtInDevice)
                     return@OnCommunicationDeviceChangedListener
                 }
                 if (enhancedModeEnabled) {
+                    rememberBuiltinRouteEvidence(device?.type)
                     val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
                     handleEnhancedBuiltinRouteDetected(headset, builtInDevice)
+                } else if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+                    rememberBuiltinRouteEvidence(device?.type)
+                    startClassicBluetoothConfirm(
+                        headset = headset,
+                        builtInType = device?.type,
+                        reason = "检测到通信设备切到${builtinDeviceName(device?.type)}"
+                    )
                 } else {
+                    rememberBuiltinRouteEvidence(device?.type)
                     restoreCommunicationToHeadset(
                         preferredOutputDevice = headset,
                         reason = "检测到声道被劫持到${builtinDeviceName(device?.type)}"
@@ -228,10 +274,13 @@ class AudioRouteMonitor(private val context: Context) {
                     startRecoveryWindow("回调检测到路由劫持")
                 }
             } else {
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("通信设备恢复为非内建设备", announce = false)
                 if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
                     updateEnhancedState(EnhancedState.ACTIVE)
                 }
                 reportStatus(GuardStatus.NORMAL)
+                syncClassicBluetoothSoftGuard("通信设备变化后更新保真守护")
             }
         }
 
@@ -242,20 +291,32 @@ class AudioRouteMonitor(private val context: Context) {
                 addLog("耳机已连接: ${headset.productName}")
                 if (enhancedModeEnabled) {
                     refreshEnhancedObservationState("检测到耳机接入", headset)
+                    syncClassicBluetoothSoftGuard("检测到耳机接入")
                     return
                 }
 
                 val commDevice = audioManager.communicationDevice
                 if (commDevice?.type in BUILTIN_TYPES) {
-                    restoreCommunicationToHeadset(
-                        preferredOutputDevice = headset,
-                        reason = "检测到耳机接入，尝试恢复声道"
-                    )
-                    startRecoveryWindow("耳机接入后检测到内建设备")
+                    if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+                        clearBuiltinRouteEvidence()
+                        maybeLogPassiveClassicBluetoothObservation(
+                            headset = headset,
+                            reason = "耳机接入后通信设备显示为${builtinDeviceName(commDevice?.type)}"
+                        )
+                        reportStatus(GuardStatus.NORMAL)
+                    } else {
+                        rememberBuiltinRouteEvidence(commDevice?.type)
+                        restoreCommunicationToHeadset(
+                            preferredOutputDevice = headset,
+                            reason = "检测到耳机接入，尝试恢复声道"
+                        )
+                        startRecoveryWindow("耳机接入后检测到内建设备")
+                    }
                 } else {
                     startRecoveryWindow("耳机接入后确认路由稳定")
                     reportStatus(GuardStatus.NORMAL)
                 }
+                syncClassicBluetoothSoftGuard("检测到耳机接入")
             }
         }
 
@@ -265,9 +326,11 @@ class AudioRouteMonitor(private val context: Context) {
                 addLog("耳机已断开: ${headset.productName}")
                 if (findConnectedHeadset() == null) {
                     stopClearProbe("耳机全部断开")
+                    stopClassicBluetoothConfirm("耳机全部断开", announce = false)
                     stopRecoveryWindow("耳机全部断开")
                     stopReleaseProbe("耳机全部断开")
                     classicBluetoothWidebandAttemptTimesMs.clear()
+                    clearBuiltinRouteEvidence()
                     clearClassicBluetoothHoldState()
                     clearCommunicationDeviceSafely()
                     if (enhancedModeEnabled) {
@@ -275,9 +338,129 @@ class AudioRouteMonitor(private val context: Context) {
                         updateEnhancedState(EnhancedState.WAITING_HEADSET)
                     }
                     reportStatus(GuardStatus.NO_HEADSET)
+                } else {
+                    syncClassicBluetoothSoftGuard("耳机列表变化")
                 }
             }
         }
+    }
+
+    private fun shouldUsePassiveClassicBluetoothConfirmation(headset: AudioDeviceInfo): Boolean {
+        return !enhancedModeEnabled &&
+            !hasGuardCommunicationHold() &&
+            isClassicBluetoothOutputDevice(headset)
+    }
+
+    private fun maybeLogPassiveClassicBluetoothObservation(
+        headset: AudioDeviceInfo,
+        reason: String,
+    ) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastClassicBluetoothPassiveObserveLoggedAtElapsedMs < CLASSIC_BLUETOOTH_PASSIVE_OBSERVE_LOG_COOLDOWN_MS) {
+            return
+        }
+        lastClassicBluetoothPassiveObserveLoggedAtElapsedMs = now
+        addLog("$reason，经典蓝牙默认先观察，不主动接管 ${headset.productName}")
+    }
+
+    private fun startClassicBluetoothConfirm(
+        headset: AudioDeviceInfo,
+        builtInType: Int?,
+        reason: String,
+    ) {
+        if (!running || !shouldUsePassiveClassicBluetoothConfirmation(headset)) return
+
+        if (
+            pollingMode == PollingMode.CLASSIC_BLUETOOTH_CONFIRM &&
+            classicBluetoothConfirmHeadset?.let { isSamePhysicalDevice(it, headset) } == true &&
+            classicBluetoothConfirmBuiltInType == builtInType
+        ) {
+            return
+        }
+
+        if (pollingMode == PollingMode.RECOVERY_WINDOW) {
+            stopRecoveryWindow("切换到经典蓝牙被动确认")
+        }
+
+        classicBluetoothConfirmHeadset = headset
+        classicBluetoothConfirmReason = reason
+        classicBluetoothConfirmBuiltInType = builtInType
+        classicBluetoothConfirmHitCount = 1
+        classicBluetoothConfirmDeadlineMs =
+            SystemClock.elapsedRealtime() + CLASSIC_BLUETOOTH_CONFIRM_WINDOW_MS
+        pollingMode = PollingMode.CLASSIC_BLUETOOTH_CONFIRM
+        addLog("$reason，经典蓝牙先确认是否为持续劫持")
+        reportStatus(GuardStatus.NORMAL)
+        handler.removeCallbacks(pollingRunnable)
+        handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
+        syncClassicBluetoothSoftGuard("进入经典蓝牙被动确认")
+    }
+
+    private fun stopClassicBluetoothConfirm(reason: String, announce: Boolean = true) {
+        if (pollingMode != PollingMode.CLASSIC_BLUETOOTH_CONFIRM) return
+        pollingMode = PollingMode.IDLE
+        classicBluetoothConfirmHeadset = null
+        classicBluetoothConfirmReason = null
+        classicBluetoothConfirmBuiltInType = null
+        classicBluetoothConfirmHitCount = 0
+        classicBluetoothConfirmDeadlineMs = 0L
+        handler.removeCallbacks(pollingRunnable)
+        if (announce) {
+            addLog("退出经典蓝牙观察: $reason")
+        }
+        syncClassicBluetoothSoftGuard("退出经典蓝牙被动确认")
+    }
+
+    private fun handleClassicBluetoothConfirmTick() {
+        if (pollingMode != PollingMode.CLASSIC_BLUETOOTH_CONFIRM) return
+
+        val headset = classicBluetoothConfirmHeadset ?: findConnectedHeadset()
+        if (headset == null) {
+            clearBuiltinRouteEvidence()
+            stopClassicBluetoothConfirm("观察期间未检测到耳机")
+            reportStatus(GuardStatus.NO_HEADSET)
+            return
+        }
+
+        if (!shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+            stopClassicBluetoothConfirm("观察条件已变化", announce = false)
+            return
+        }
+
+        val commDevice = audioManager.communicationDevice
+        if (commDevice?.type !in BUILTIN_TYPES) {
+            clearBuiltinRouteEvidence()
+            stopClassicBluetoothConfirm("观察期间未再检测到内建设备")
+            reportStatus(GuardStatus.NORMAL)
+            return
+        }
+
+        val builtInDevice = commDevice ?: return
+        classicBluetoothConfirmBuiltInType = builtInDevice.type
+        classicBluetoothConfirmHitCount++
+        if (classicBluetoothConfirmHitCount >= CLASSIC_BLUETOOTH_CONFIRM_REQUIRED_HITS) {
+            stopClassicBluetoothConfirm("已确认持续劫持", announce = false)
+            val fixed = restoreCommunicationToHeadset(
+                preferredOutputDevice = headset,
+                reason = classicBluetoothConfirmReason
+                    ?: "经典蓝牙确认${builtinDeviceName(builtInDevice.type)}路由持续存在，尝试恢复声道"
+            )
+            if (fixed) {
+                startRecoveryWindow("经典蓝牙确认劫持后恢复")
+            } else {
+                reportStatus(GuardStatus.HIJACKED)
+            }
+            return
+        }
+
+        if (SystemClock.elapsedRealtime() >= classicBluetoothConfirmDeadlineMs) {
+            clearBuiltinRouteEvidence()
+            stopClassicBluetoothConfirm("观察窗口结束，未确认持续劫持")
+            reportStatus(GuardStatus.NORMAL)
+            return
+        }
+
+        handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
     }
 
     private fun handleClearProbeTick() {
@@ -306,6 +489,7 @@ class AudioRouteMonitor(private val context: Context) {
         }
 
         if (commDevice?.type in BUILTIN_TYPES) {
+            rememberBuiltinRouteEvidence(commDevice?.type)
             stopClearProbe("释放后仍停留在${builtinDeviceName(commDevice?.type)}")
             tryEnterCommunicationMode("增强守护重新申请通信模式")
             val fixed = restoreCommunicationToHeadset(
@@ -347,11 +531,21 @@ class AudioRouteMonitor(private val context: Context) {
         val commDevice = audioManager.communicationDevice
         if (commDevice?.type in BUILTIN_TYPES) {
             stableHitCount = 0
-            restoreCommunicationToHeadset(
-                preferredOutputDevice = headset,
-                reason = "恢复观察窗口检测到声道再次被劫持到${builtinDeviceName(commDevice?.type)}"
-            )
-            handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
+            if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+                clearBuiltinRouteEvidence()
+                startClassicBluetoothConfirm(
+                    headset = headset,
+                    builtInType = commDevice?.type,
+                    reason = "恢复观察窗口检测到声道切到${builtinDeviceName(commDevice?.type)}"
+                )
+            } else {
+                rememberBuiltinRouteEvidence(commDevice?.type)
+                restoreCommunicationToHeadset(
+                    preferredOutputDevice = headset,
+                    reason = "恢复观察窗口检测到声道再次被劫持到${builtinDeviceName(commDevice?.type)}"
+                )
+                handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
+            }
             return
         }
 
@@ -403,6 +597,7 @@ class AudioRouteMonitor(private val context: Context) {
 
         val commDevice = audioManager.communicationDevice
         if (commDevice?.type in BUILTIN_TYPES) {
+            rememberBuiltinRouteEvidence(commDevice?.type)
             val builtInDevice = commDevice ?: return
             handleReleaseProbeBuiltinRouteDetected(headset, builtInDevice)
             return
@@ -432,6 +627,7 @@ class AudioRouteMonitor(private val context: Context) {
             return
         }
 
+        stopClassicBluetoothConfirm("切换到增强观察模式", announce = false)
         stopRecoveryWindow("切换到增强观察模式")
         stopReleaseProbe("切换到增强观察模式")
         clearProbeHeadset = headset
@@ -443,6 +639,7 @@ class AudioRouteMonitor(private val context: Context) {
         reportStatus(GuardStatus.HIJACKED)
         handler.removeCallbacks(pollingRunnable)
         handler.post(pollingRunnable)
+        syncClassicBluetoothSoftGuard("切换到增强观察模式")
     }
 
     private fun stopClearProbe(reason: String) {
@@ -451,9 +648,11 @@ class AudioRouteMonitor(private val context: Context) {
         clearProbeHeadset = null
         handler.removeCallbacks(pollingRunnable)
         addLog("退出增强观察: $reason")
+        syncClassicBluetoothSoftGuard("退出增强观察")
     }
 
     private fun startRecoveryWindow(reason: String) {
+        stopClassicBluetoothConfirm("切换到恢复观察窗口", announce = false)
         val currentComm = audioManager.communicationDevice?.productName
         val currentHeadset = findConnectedHeadset()?.productName
         addLog("进入恢复观察窗口: $reason, comm=$currentComm, headset=$currentHeadset")
@@ -462,6 +661,7 @@ class AudioRouteMonitor(private val context: Context) {
         stableHitCount = 0
         handler.removeCallbacks(pollingRunnable)
         handler.post(pollingRunnable)
+        syncClassicBluetoothSoftGuard("进入恢复观察窗口")
     }
 
     private fun stopRecoveryWindow(reason: String) {
@@ -470,6 +670,7 @@ class AudioRouteMonitor(private val context: Context) {
         stableHitCount = 0
         handler.removeCallbacks(pollingRunnable)
         addLog("退出恢复观察窗口: $reason")
+        syncClassicBluetoothSoftGuard("退出恢复观察窗口")
     }
 
     private fun startReleaseProbe(preferredHeadset: AudioDeviceInfo?, reason: String) {
@@ -490,6 +691,7 @@ class AudioRouteMonitor(private val context: Context) {
             return
         }
 
+        stopClassicBluetoothConfirm("切换到归还系统观察", announce = false)
         stopClearProbe("切换到归还系统观察")
         stopRecoveryWindow("切换到归还系统观察")
         releaseProbeHeadset = headset
@@ -503,6 +705,7 @@ class AudioRouteMonitor(private val context: Context) {
         reportStatus(GuardStatus.NORMAL)
         handler.removeCallbacks(pollingRunnable)
         handler.post(pollingRunnable)
+        syncClassicBluetoothSoftGuard("进入归还观察")
     }
 
     private fun stopReleaseProbe(reason: String) {
@@ -511,6 +714,7 @@ class AudioRouteMonitor(private val context: Context) {
         releaseProbeHeadset = null
         handler.removeCallbacks(pollingRunnable)
         addLog("退出归还观察: $reason")
+        syncClassicBluetoothSoftGuard("退出归还观察")
     }
 
     fun start() {
@@ -535,14 +739,24 @@ class AudioRouteMonitor(private val context: Context) {
         } else if (enhancedModeEnabled) {
             refreshEnhancedObservationState("增强守护启动", headset)
         } else if (audioManager.communicationDevice?.type in BUILTIN_TYPES) {
-            restoreCommunicationToHeadset(
-                preferredOutputDevice = headset,
-                reason = "启动时检测到声道仍在${builtinDeviceName(audioManager.communicationDevice?.type)}"
-            )
-            startRecoveryWindow("启动阶段检测到内建设备")
+            if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+                clearBuiltinRouteEvidence()
+                maybeLogPassiveClassicBluetoothObservation(
+                    headset = headset,
+                    reason = "启动时通信设备显示为${builtinDeviceName(audioManager.communicationDevice?.type)}"
+                )
+                reportStatus(GuardStatus.NORMAL)
+            } else {
+                restoreCommunicationToHeadset(
+                    preferredOutputDevice = headset,
+                    reason = "启动时检测到声道仍在${builtinDeviceName(audioManager.communicationDevice?.type)}"
+                )
+                startRecoveryWindow("启动阶段检测到内建设备")
+            }
         } else {
             reportStatus(GuardStatus.NORMAL)
         }
+        syncClassicBluetoothSoftGuard("守护启动后同步保真守护")
     }
 
     fun stop() {
@@ -550,12 +764,15 @@ class AudioRouteMonitor(private val context: Context) {
         running = false
         handler.removeCallbacks(reacquireEnhancedRunnable)
         stopClearProbe("守护停止")
+        stopClassicBluetoothConfirm("守护停止", announce = false)
         stopRecoveryWindow("守护停止")
         stopReleaseProbe("守护停止")
         unregisterModeListenerIfNeeded()
         tryLeaveCommunicationMode("守护停止")
         classicBluetoothWidebandAttemptTimesMs.clear()
+        clearBuiltinRouteEvidence()
         clearClassicBluetoothHoldState()
+        stopClassicBluetoothSoftGuard("守护停止")
         audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
         audioManager.unregisterAudioDeviceCallback(deviceCallback)
         clearCommunicationDeviceSafely()
@@ -592,11 +809,13 @@ class AudioRouteMonitor(private val context: Context) {
         }
 
         if (enabled) {
+            stopClassicBluetoothConfirm("增强守护已开启", announce = false)
             registerModeListenerIfNeeded()
             refreshEnhancedObservationState("增强守护已开启")
         } else {
             handler.removeCallbacks(reacquireEnhancedRunnable)
             stopClearProbe("增强守护已关闭")
+            stopClassicBluetoothConfirm("增强守护已关闭", announce = false)
             stopRecoveryWindow("增强守护已关闭")
             stopReleaseProbe("增强守护已关闭")
             unregisterModeListenerIfNeeded()
@@ -605,9 +824,18 @@ class AudioRouteMonitor(private val context: Context) {
             clearCommunicationDeviceSafely()
             updateEnhancedState(EnhancedState.DISABLED)
         }
+        syncClassicBluetoothSoftGuard("增强守护配置变化")
     }
 
     fun isEnhancedModeEnabled(): Boolean = enhancedModeEnabled
+
+    fun setClassicBluetoothSoftGuardEnabled(enabled: Boolean) {
+        if (classicBluetoothSoftGuardEnabled == enabled) return
+        classicBluetoothSoftGuardEnabled = enabled
+        syncClassicBluetoothSoftGuard("经典蓝牙保真守护配置变化")
+    }
+
+    fun isClassicBluetoothSoftGuardEnabled(): Boolean = classicBluetoothSoftGuardEnabled
 
     fun setClassicBluetoothWidebandEnabled(enabled: Boolean) {
         if (classicBluetoothWidebandEnabled == enabled) return
@@ -651,6 +879,12 @@ class AudioRouteMonitor(private val context: Context) {
         return if (pollingMode == PollingMode.CLEAR_PROBE) {
             GuardStatus.HIJACKED
         } else if (commDevice?.type in BUILTIN_TYPES) {
+            if (
+                shouldUsePassiveClassicBluetoothConfirmation(headset) &&
+                !hasRecentBuiltinRouteEvidence()
+            ) {
+                GuardStatus.NORMAL
+            } else
             if (lastReportedStatus == GuardStatus.FIXED && pollingMode == PollingMode.IDLE) {
                 GuardStatus.FIXED_BUT_SPEAKER_ROUTE
             } else {
@@ -713,6 +947,7 @@ class AudioRouteMonitor(private val context: Context) {
 
         val commDevice = audioManager.communicationDevice
         if (commDevice?.type in BUILTIN_TYPES) {
+            rememberBuiltinRouteEvidence(commDevice?.type)
             startClearProbe(headset, "$reason，检测到声道在${builtinDeviceName(commDevice?.type)}")
             return
         }
@@ -721,12 +956,14 @@ class AudioRouteMonitor(private val context: Context) {
             updateEnhancedState(EnhancedState.ACTIVE)
         }
         reportStatus(GuardStatus.NORMAL)
+        syncClassicBluetoothSoftGuard("增强守护监听状态变化")
     }
 
     private fun handleEnhancedBuiltinRouteDetected(
         headset: AudioDeviceInfo,
         builtInDevice: AudioDeviceInfo,
     ) {
+        rememberBuiltinRouteEvidence(builtInDevice.type)
         val builtInName = builtinDeviceName(builtInDevice.type)
         when (pollingMode) {
             PollingMode.RECOVERY_WINDOW -> {
@@ -793,6 +1030,7 @@ class AudioRouteMonitor(private val context: Context) {
 
             else -> reportStatus(GuardStatus.NORMAL)
         }
+        syncClassicBluetoothSoftGuard("增强守护尝试重新接管后同步保真守护")
     }
 
     private fun shouldKeepClassicBluetoothHoldAfterRecovery(headset: AudioDeviceInfo): Boolean {
@@ -810,6 +1048,7 @@ class AudioRouteMonitor(private val context: Context) {
             "蓝牙音频已被应用接管，如抢占声道应用已关闭，您可点击尝试解除该限制"
         addLog("$reason，经典蓝牙暂不自动归还，等待用户手动解除限制")
         notifyCurrentStatusChanged()
+        syncClassicBluetoothSoftGuard("进入经典蓝牙限制保持")
     }
 
     private fun markClassicBluetoothReleaseFailed() {
@@ -829,6 +1068,7 @@ class AudioRouteMonitor(private val context: Context) {
         if (changed) {
             notifyCurrentStatusChanged()
         }
+        syncClassicBluetoothSoftGuard("清理经典蓝牙限制保持")
     }
 
     private fun isClassicBluetoothOutputDevice(device: AudioDeviceInfo): Boolean {
@@ -840,6 +1080,7 @@ class AudioRouteMonitor(private val context: Context) {
         headset: AudioDeviceInfo,
         builtInDevice: AudioDeviceInfo,
     ) {
+        rememberBuiltinRouteEvidence(builtInDevice.type)
         val builtInName = builtinDeviceName(builtInDevice.type)
         stopReleaseProbe("归还系统后回调检测到劫持再次出现")
         if (classicBluetoothManualReleaseInProgress) {
@@ -879,6 +1120,7 @@ class AudioRouteMonitor(private val context: Context) {
         } catch (exception: RuntimeException) {
             addLog("增强守护申请通信模式失败(${exception.javaClass.simpleName})")
         }
+        syncClassicBluetoothSoftGuard("申请通信模式")
     }
 
     private fun tryLeaveCommunicationMode(reason: String) {
@@ -894,6 +1136,7 @@ class AudioRouteMonitor(private val context: Context) {
         } finally {
             modeRequestedByEnhanced = false
         }
+        syncClassicBluetoothSoftGuard("释放通信模式")
     }
 
     private fun shouldSuspendForCall(mode: Int): Boolean {
@@ -920,6 +1163,19 @@ class AudioRouteMonitor(private val context: Context) {
             return false
         }
 
+        val restoreAttemptKey = deviceIdentityKey(communicationHeadset)
+        val now = SystemClock.elapsedRealtime()
+        val lastAttemptKey = lastRestoreAttemptDeviceKey
+        if (
+            restoreAttemptKey != null &&
+            restoreAttemptKey == lastAttemptKey &&
+            now - lastRestoreAttemptAtElapsedMs < RESTORE_REQUEST_DEBOUNCE_MS
+        ) {
+            return true
+        }
+
+        lastRestoreAttemptDeviceKey = restoreAttemptKey
+        lastRestoreAttemptAtElapsedMs = now
         return setCommunicationDeviceSafely(communicationHeadset)
     }
 
@@ -953,6 +1209,7 @@ class AudioRouteMonitor(private val context: Context) {
                 addLog("已将声道恢复到 ${device.productName}")
                 reportStatus(GuardStatus.FIXED)
                 maybeApplyClassicBluetoothWidebandHint(device, previousCommunicationDevice)
+                syncClassicBluetoothSoftGuard("已建立强制通信路由")
             } else {
                 addLog("系统未接受通信设备切换请求: ${device.productName}")
                 reportStatus(GuardStatus.HIJACKED)
@@ -1068,6 +1325,145 @@ class AudioRouteMonitor(private val context: Context) {
         }
     }
 
+    private fun rememberBuiltinRouteEvidence(deviceType: Int?) {
+        if (deviceType !in BUILTIN_TYPES) return
+        lastBuiltinRouteEvidenceAtElapsedMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun clearBuiltinRouteEvidence() {
+        lastBuiltinRouteEvidenceAtElapsedMs = 0L
+    }
+
+    private fun hasRecentBuiltinRouteEvidence(nowElapsedMs: Long = SystemClock.elapsedRealtime()): Boolean {
+        val lastEvidenceAt = lastBuiltinRouteEvidenceAtElapsedMs
+        return lastEvidenceAt != 0L &&
+            nowElapsedMs - lastEvidenceAt <= SOFT_GUARD_HIJACK_EVIDENCE_WINDOW_MS
+    }
+
+    private fun maybeLogSoftGuardPassiveSkip(
+        headset: AudioDeviceInfo,
+        builtInDevice: AudioDeviceInfo,
+        nowElapsedMs: Long,
+    ) {
+        if (nowElapsedMs - lastSoftGuardPassiveSkipLoggedAtElapsedMs < SOFT_GUARD_PASSIVE_SKIP_LOG_COOLDOWN_MS) {
+            return
+        }
+        lastSoftGuardPassiveSkipLoggedAtElapsedMs = nowElapsedMs
+        addLog(
+            "经典蓝牙保真守护检测到无障碍音频落到${builtinDeviceName(builtInDevice.type)}，" +
+                "但未发现明确声道劫持，暂不强制接管 ${headset.productName}"
+        )
+    }
+
+    private fun syncClassicBluetoothSoftGuard(reason: String) {
+        handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
+
+        val headset = findConnectedHeadset()
+        val shouldRun =
+            running &&
+                classicBluetoothSoftGuardEnabled &&
+                headset != null &&
+                isClassicBluetoothOutputDevice(headset) &&
+                pollingMode == PollingMode.IDLE &&
+                !hasGuardCommunicationHold() &&
+                !shouldSuspendForCall(audioManager.mode)
+
+        if (!shouldRun) {
+            stopClassicBluetoothSoftGuard(reason)
+            return
+        }
+
+        val targetHeadset = headset ?: return
+        val previousTarget = classicBluetoothSoftGuard.getTargetDevice()
+        val wasRunning = classicBluetoothSoftGuard.isRunning()
+        if (!classicBluetoothSoftGuard.startOrUpdate(targetHeadset)) {
+            stopClassicBluetoothSoftGuard("$reason，保真守护启动失败")
+            addLog("经典蓝牙保真守护启动失败: ${targetHeadset.productName}")
+            return
+        }
+
+        val retargeted =
+            !wasRunning ||
+                previousTarget == null ||
+                !isSamePhysicalDevice(previousTarget, targetHeadset)
+        if (retargeted) {
+            classicBluetoothSoftGuardStartedAtElapsedMs = SystemClock.elapsedRealtime()
+            addLog("经典蓝牙保真守护已启动: ${targetHeadset.productName}")
+        }
+        handler.postDelayed(
+            classicBluetoothSoftGuardVerificationRunnable,
+            SOFT_GUARD_VERIFY_DELAY_MS
+        )
+    }
+
+    private fun stopClassicBluetoothSoftGuard(reason: String) {
+        val wasRunning = classicBluetoothSoftGuard.isRunning()
+        handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
+        classicBluetoothSoftGuard.stop()
+        if (wasRunning) {
+            addLog("经典蓝牙保真守护已停止: $reason")
+        }
+    }
+
+    private fun handleClassicBluetoothSoftGuardRouteChanged(routedDevice: AudioDeviceInfo?) {
+        evaluateClassicBluetoothSoftGuardRoute("经典蓝牙保真守护检测到路由变化", routedDevice)
+    }
+
+    private fun evaluateClassicBluetoothSoftGuardRoute(
+        reason: String,
+        routedDevice: AudioDeviceInfo? = classicBluetoothSoftGuard.getRoutedDevice(),
+    ) {
+        if (
+            !running ||
+            !classicBluetoothSoftGuardEnabled ||
+            !classicBluetoothSoftGuard.isRunning() ||
+            pollingMode != PollingMode.IDLE ||
+            hasGuardCommunicationHold() ||
+            shouldSuspendForCall(audioManager.mode)
+        ) {
+            return
+        }
+
+        val headset = findConnectedHeadset() ?: return
+        if (!isClassicBluetoothOutputDevice(headset)) return
+
+        val currentRoutedDevice = routedDevice ?: return
+        if (currentRoutedDevice.type !in BUILTIN_TYPES) return
+
+        val now = SystemClock.elapsedRealtime()
+        if (!hasRecentBuiltinRouteEvidence(now)) {
+            maybeLogSoftGuardPassiveSkip(headset, currentRoutedDevice, now)
+            return
+        }
+
+        if (now - classicBluetoothSoftGuardStartedAtElapsedMs < SOFT_GUARD_VERIFY_DELAY_MS) {
+            handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
+            handler.postDelayed(
+                classicBluetoothSoftGuardVerificationRunnable,
+                SOFT_GUARD_VERIFY_DELAY_MS
+            )
+            return
+        }
+
+        if (now - lastSoftGuardEscalationAtElapsedMs < SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS) {
+            return
+        }
+        lastSoftGuardEscalationAtElapsedMs = now
+
+        addLog("$reason，已升级为强制恢复: ${headset.productName}")
+        if (enhancedModeEnabled) {
+            tryEnterCommunicationMode("经典蓝牙保真守护升级接管")
+            updateEnhancedState(EnhancedState.ACTIVE)
+        }
+        val fixed = restoreCommunicationToHeadset(
+            preferredOutputDevice = headset,
+            reason = "经典蓝牙保真守护未能维持耳机路由，强制恢复到耳机"
+        )
+        if (fixed) {
+            startRecoveryWindow("经典蓝牙保真守护升级为强制恢复")
+        }
+    }
+
     private fun hasGuardCommunicationHold(): Boolean {
         return guardOwnsCommunicationDevice || modeRequestedByEnhanced
     }
@@ -1079,6 +1475,19 @@ class AudioRouteMonitor(private val context: Context) {
 
     private fun builtinDeviceName(type: Int?): String {
         return if (type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) "听筒" else "扬声器"
+    }
+
+    private fun deviceIdentityKey(device: AudioDeviceInfo?): String? {
+        if (device == null) return null
+        val address = device.address.orEmpty()
+        if (address.isNotEmpty()) {
+            return "${device.type}:$address"
+        }
+        val productName = device.productName?.toString().orEmpty()
+        if (productName.isNotEmpty()) {
+            return "${device.type}:$productName"
+        }
+        return device.type.toString()
     }
 
     private fun addLog(message: String) {

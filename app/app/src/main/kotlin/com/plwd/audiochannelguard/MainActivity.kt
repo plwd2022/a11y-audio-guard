@@ -96,6 +96,9 @@ private fun AudioGuardScreen() {
     var status by remember { mutableStateOf(GuardStatus.NO_HEADSET) }
     var fixLog by remember { mutableStateOf<List<FixEvent>>(emptyList()) }
     var enhancedEnabled by remember { mutableStateOf(AudioGuardApp.isEnhancedModeEnabled(context)) }
+    var classicBluetoothSoftGuardEnabled by remember {
+        mutableStateOf(AudioGuardApp.isClassicBluetoothSoftGuardEnabled(context))
+    }
     var classicBluetoothWidebandEnabled by remember {
         mutableStateOf(AudioGuardApp.isClassicBluetoothWidebandEnabled(context))
     }
@@ -127,6 +130,7 @@ private fun AudioGuardScreen() {
     val refreshState: () -> Unit = {
         serviceRunning = AudioGuardService.isRunning()
         enhancedEnabled = AudioGuardApp.isEnhancedModeEnabled(context)
+        classicBluetoothSoftGuardEnabled = AudioGuardApp.isClassicBluetoothSoftGuardEnabled(context)
         classicBluetoothWidebandEnabled = AudioGuardApp.isClassicBluetoothWidebandEnabled(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
@@ -333,6 +337,50 @@ private fun AudioGuardScreen() {
 
             val classicBluetoothWidebandToggleDesc =
                 "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效"
+            val classicBluetoothSoftGuardToggleDesc =
+                "经典蓝牙保真守护（实验性）。仅对经典蓝牙耳机生效。先用静默无障碍音频尽量稳住 A2DP；压不住时再升级到强制接管，减少长期窄带机会"
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = classicBluetoothSoftGuardToggleDesc
+                        role = Role.Switch
+                        toggleableState = ToggleableState(classicBluetoothSoftGuardEnabled)
+                        stateDescription = if (classicBluetoothSoftGuardEnabled) "已开启" else "已关闭"
+                    }
+                    .toggleable(
+                        value = classicBluetoothSoftGuardEnabled,
+                        role = Role.Switch,
+                        onValueChange = { enabled ->
+                            classicBluetoothSoftGuardEnabled = enabled
+                            AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setClassicBluetoothSoftGuardEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    ),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("经典蓝牙保真守护（实验性）", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "仅对经典蓝牙耳机生效。先用静默无障碍音频尽量稳住 A2DP；压不住时再升级到强制接管，减少长期窄带机会",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = classicBluetoothSoftGuardEnabled,
+                    onCheckedChange = null
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
