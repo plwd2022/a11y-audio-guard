@@ -84,6 +84,7 @@ class AudioGuardService : Service() {
 
         startForeground(NOTIFICATION_ID, buildNotification("声道守护运行中"))
         monitor.start()
+        AudioFixTile.requestTileRefresh(this)
         rebindListeners.forEach { it.onRebind(monitor) }
     }
 
@@ -94,6 +95,7 @@ class AudioGuardService : Service() {
             monitor.stop()
         }
         instance = null
+        AudioFixTile.requestTileRefresh(this)
         super.onDestroy()
     }
 
@@ -140,6 +142,7 @@ class AudioGuardService : Service() {
         }
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(NOTIFICATION_ID, buildNotification(text))
+        AudioFixTile.requestTileRefresh(this)
     }
 
     private fun defaultStatusText(status: GuardStatus): String {

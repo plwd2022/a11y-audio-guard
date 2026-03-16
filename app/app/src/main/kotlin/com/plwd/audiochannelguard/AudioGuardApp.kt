@@ -46,6 +46,13 @@ class AudioGuardApp : Application() {
         fun setGuardEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENABLED, enabled).apply()
+            AudioFixTile.requestTileRefresh(context)
+        }
+
+        fun setGuardEnabledSync(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_ENABLED, enabled).commit()
+            AudioFixTile.requestTileRefresh(context)
         }
 
         fun isEnhancedModeEnabled(context: Context): Boolean {
@@ -84,8 +91,14 @@ class AudioGuardApp : Application() {
         }
 
         fun setTileAdded(context: Context, added: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_TILE_ADDED, added).apply()
+            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val wasAdded = prefs.getBoolean(KEY_TILE_ADDED, false)
+            if (wasAdded == added) return
+
+            prefs.edit().putBoolean(KEY_TILE_ADDED, added).apply()
+            if (added) {
+                AudioFixTile.requestTileRefresh(context)
+            }
         }
 
         fun isAutoStartConfirmed(context: Context): Boolean {

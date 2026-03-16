@@ -1,13 +1,40 @@
 package com.plwd.audiochannelguard
 
+import android.content.ComponentName
+import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 
 class AudioFixTile : TileService() {
 
+    companion object {
+        private val tileRefreshHandler = Handler(Looper.getMainLooper())
+
+        fun requestTileRefresh(context: Context) {
+            val appContext = context.applicationContext
+            runCatching {
+                TileService.requestListeningState(
+                    appContext,
+                    ComponentName(appContext, AudioFixTile::class.java)
+                )
+            }
+        }
+
+        fun requestTileRefreshDelayed(context: Context, delayMillis: Long = 700L) {
+            val appContext = context.applicationContext
+            tileRefreshHandler.postDelayed(
+                { requestTileRefresh(appContext) },
+                delayMillis
+            )
+        }
+    }
+
     override fun onTileAdded() {
         super.onTileAdded()
         AudioGuardApp.setTileAdded(this, true)
+        updateTile()
     }
 
     override fun onTileRemoved() {
@@ -17,39 +44,79 @@ class AudioFixTile : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
+        AudioGuardApp.setTileAdded(this, true)
         updateTile()
     }
 
     override fun onClick() {
         super.onClick()
-        val monitor = AudioGuardService.getMonitor()
-        if (monitor != null) {
-            monitor.fixNow()
-        } else if (AudioGuardApp.isGuardEnabled(this)) {
+        if (AudioGuardApp.isTampered) {
+            updateTile()
+            return
+        }
+
+        val enableGuard = !AudioGuardApp.isGuardEnabled(this)
+        AudioGuardApp.setGuardEnabledSync(this, enableGuard)
+        if (enableGuard) {
             AudioGuardService.start(this)
+            ServiceGuard.schedulePeriodicCheck(this)
+        } else {
+            AudioGuardService.stop(this)
         }
         updateTile()
+        requestTileRefreshDelayed(this)
     }
 
     private fun updateTile() {
         val tile = qsTile ?: return
-        val monitor = AudioGuardService.getMonitor()
+        val presentation = createPresentation()
+        tile.state = presentation.state
+        tile.label = getString(R.string.tile_label)
+        tile.subtitle = presentation.subtitle
+        tile.updateTile()
+    }
 
-        if (monitor == null) {
-            tile.state = Tile.STATE_INACTIVE
-            tile.subtitle = "未运行"
-        } else {
-            val headset = monitor.findConnectedHeadset()
-            if (headset != null) {
-                tile.state = Tile.STATE_ACTIVE
-                tile.subtitle = headset.productName?.toString() ?: "已连接"
-            } else {
-                tile.state = Tile.STATE_INACTIVE
-                tile.subtitle = "未连接耳机"
+    private fun createPresentation(): TilePresentation {
+        if (AudioGuardApp.isTampered) {
+            return TilePresentation(
+                state = Tile.STATE_UNAVAILABLE,
+                subtitle = "签名异常"
+            )
+        }
+
+        if (!AudioGuardApp.isGuardEnabled(this)) {
+            return TilePresentation(
+                state = Tile.STATE_INACTIVE,
+                subtitle = "未运行"
+            )
+        }
+
+        val monitor = AudioGuardService.getMonitor()
+            ?: return TilePresentation(
+                state = Tile.STATE_ACTIVE,
+                subtitle = "启动中"
+            )
+
+        val subtitle = when {
+            monitor.canManuallyReleaseHeldRoute() -> "已接管"
+            monitor.getHeldRouteMessage() != null -> "观察中"
+            else -> when (monitor.getStatus()) {
+                GuardStatus.NORMAL -> monitor.findConnectedHeadset()?.productName?.toString() ?: "已开启"
+                GuardStatus.FIXED -> "已恢复"
+                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已恢复"
+                GuardStatus.HIJACKED -> "检测到劫持"
+                GuardStatus.NO_HEADSET -> "未连接耳机"
             }
         }
 
-        tile.label = getString(R.string.tile_label)
-        tile.updateTile()
+        return TilePresentation(
+            state = Tile.STATE_ACTIVE,
+            subtitle = subtitle
+        )
     }
 }
+
+private data class TilePresentation(
+    val state: Int,
+    val subtitle: String,
+)

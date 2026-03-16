@@ -167,6 +167,19 @@ private fun AudioGuardScreen() {
         }
     }
 
+    fun probeExistingTileIfNeeded() {
+        if (tileAdded) return
+        AudioFixTile.requestTileRefresh(context)
+        scope.launch {
+            delay(350L)
+            tileAdded = AudioGuardApp.isTileAdded(context)
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        probeExistingTileIfNeeded()
+    }
+
     fun canShowAutoUpdateDialog(): Boolean {
         return updateCheckResult == null &&
             updateActionMessage == null &&
@@ -318,6 +331,7 @@ private fun AudioGuardScreen() {
                 if (event == Lifecycle.Event.ON_RESUME) {
                     showPermissionWarning = PermissionChecker.checkAllPermissions(context).any { !it.isGranted }
                     tileAdded = AudioGuardApp.isTileAdded(context)
+                    probeExistingTileIfNeeded()
                     refreshState()
                 }
             }
@@ -730,7 +744,7 @@ private fun AudioGuardScreen() {
             // 快捷设置磁贴
             if (tileAdded) {
                 Text(
-                    "已添加控制中心磁贴，可在通知栏快捷设置中点击「声道修复」快速恢复",
+                    "已添加控制中心磁贴，可在通知栏快捷设置中查看守护状态，并快速开启或关闭守护",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -744,8 +758,11 @@ private fun AudioGuardScreen() {
                             Icon.createWithResource(context, R.drawable.ic_headset),
                             context.mainExecutor
                         ) { resultCode ->
-                            if (resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED) {
+                            if (resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
+                                resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                            ) {
                                 tileAdded = true
+                                AudioGuardApp.setTileAdded(context, true)
                             }
                         }
                     },
@@ -754,7 +771,7 @@ private fun AudioGuardScreen() {
                     Text("添加控制中心磁贴")
                 }
                 Text(
-                    "添加后可在通知栏快捷设置中点击「声道修复」快速恢复，无需打开应用",
+                    "添加后可在通知栏快捷设置中直接查看当前状态，并快速开启或关闭守护",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
