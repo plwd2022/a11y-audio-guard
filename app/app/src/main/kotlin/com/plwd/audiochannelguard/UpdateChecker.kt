@@ -37,7 +37,13 @@ class UpdateChecker(private val context: Context) {
         private const val REPO_OWNER = "plwd2022"
         private const val REPO_NAME = "a11y-audio-guard"
         private const val REQUEST_TIMEOUT_MS = 15000
+        private const val AUTO_CHECK_PREFS = "update_check_prefs"
+        private const val KEY_LAST_AUTO_CHECK_AT = "last_auto_check_at"
+        private const val KEY_LAST_AUTO_PROMPTED_VERSION = "last_auto_prompted_version"
+        private const val AUTO_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
     }
+
+    private val prefs = context.getSharedPreferences(AUTO_CHECK_PREFS, Context.MODE_PRIVATE)
 
     suspend fun checkForUpdates(): UpdateCheckResult = withContext(Dispatchers.IO) {
         if (!isNetworkAvailable()) {
@@ -74,6 +80,26 @@ class UpdateChecker(private val context: Context) {
         }
 
         return@withContext UpdateCheckResult.HasUpdate(updateInfo)
+    }
+
+    fun shouldAutoCheckNow(now: Long = System.currentTimeMillis()): Boolean {
+        val lastCheckAt = prefs.getLong(KEY_LAST_AUTO_CHECK_AT, 0L)
+        return lastCheckAt <= 0L || now - lastCheckAt >= AUTO_CHECK_INTERVAL_MS
+    }
+
+    fun recordAutoCheckAttempt(now: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LAST_AUTO_CHECK_AT, now).apply()
+    }
+
+    fun shouldPromptAutoUpdate(versionName: String): Boolean {
+        val lastPromptedVersion = prefs.getString(KEY_LAST_AUTO_PROMPTED_VERSION, null)
+        return normalizeVersionName(lastPromptedVersion.orEmpty()) != normalizeVersionName(versionName)
+    }
+
+    fun markAutoUpdatePrompted(versionName: String) {
+        prefs.edit()
+            .putString(KEY_LAST_AUTO_PROMPTED_VERSION, normalizeVersionName(versionName))
+            .apply()
     }
 
     private fun fetchLatestRelease(): GitHubRelease {

@@ -116,12 +116,14 @@ private fun AudioGuardScreen() {
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isStartingBuiltinDownload by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
+    var pendingAutoUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var updateActionMessage by remember { mutableStateOf<String?>(null) }
     var showInstallPermissionDialog by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
     var showFixLogDialog by remember { mutableStateOf(false) }
+    var hasScheduledAutoCheck by remember { mutableStateOf(false) }
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     val activity = context as? ComponentActivity
     val contentScrollState = rememberScrollState()
@@ -165,12 +167,57 @@ private fun AudioGuardScreen() {
         }
     }
 
-    fun launchUpdateCheck() {
+    fun canShowAutoUpdateDialog(): Boolean {
+        return updateCheckResult == null &&
+            updateActionMessage == null &&
+            !showInstallPermissionDialog &&
+            !showAbout &&
+            !showPermissionGuide &&
+            !showFixLogDialog
+    }
+
+    fun showAutoUpdateDialogIfPossible(updateInfo: UpdateInfo) {
+        if (!updateChecker.shouldPromptAutoUpdate(updateInfo.latestVersionName)) {
+            pendingAutoUpdateInfo = null
+            return
+        }
+        if (updateDownloadState !is UpdateDownloadState.Idle ||
+            updateCheckResult != null ||
+            updateActionMessage != null ||
+            showInstallPermissionDialog
+        ) {
+            pendingAutoUpdateInfo = null
+            return
+        }
+        if (showAbout || showPermissionGuide || showFixLogDialog) {
+            pendingAutoUpdateInfo = updateInfo
+            return
+        }
+
+        updateChecker.markAutoUpdatePrompted(updateInfo.latestVersionName)
+        pendingAutoUpdateInfo = null
+        updateCheckResult = UpdateCheckResult.HasUpdate(updateInfo)
+    }
+
+    fun launchUpdateCheck(isAutomatic: Boolean = false) {
         if (isCheckingUpdate) return
         scope.launch {
+            if (isAutomatic && !updateChecker.shouldAutoCheckNow()) {
+                return@launch
+            }
             isCheckingUpdate = true
             try {
-                updateCheckResult = updateChecker.checkForUpdates()
+                val result = updateChecker.checkForUpdates()
+                if (isAutomatic) {
+                    if (result !is UpdateCheckResult.NoNetwork) {
+                        updateChecker.recordAutoCheckAttempt()
+                    }
+                    if (result is UpdateCheckResult.HasUpdate) {
+                        showAutoUpdateDialogIfPossible(result.updateInfo)
+                    }
+                } else {
+                    updateCheckResult = result
+                }
             } finally {
                 isCheckingUpdate = false
             }
@@ -236,6 +283,31 @@ private fun AudioGuardScreen() {
                 }
             }
         }
+    }
+
+    LaunchedEffect(updateDownloadState) {
+        if (hasScheduledAutoCheck) return@LaunchedEffect
+        if (updateDownloadState !is UpdateDownloadState.Idle) return@LaunchedEffect
+
+        hasScheduledAutoCheck = true
+        delay(1500L)
+        launchUpdateCheck(isAutomatic = true)
+    }
+
+    LaunchedEffect(
+        pendingAutoUpdateInfo,
+        updateDownloadState,
+        updateCheckResult,
+        updateActionMessage,
+        showInstallPermissionDialog,
+        showAbout,
+        showPermissionGuide,
+        showFixLogDialog
+    ) {
+        val pendingUpdateInfo = pendingAutoUpdateInfo ?: return@LaunchedEffect
+        if (updateDownloadState !is UpdateDownloadState.Idle) return@LaunchedEffect
+        if (!canShowAutoUpdateDialog()) return@LaunchedEffect
+        showAutoUpdateDialogIfPossible(pendingUpdateInfo)
     }
 
     DisposableEffect(activity) {
@@ -639,6 +711,11 @@ private fun AudioGuardScreen() {
             ) {
                 Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
             }
+            Text(
+                "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
             UpdateDownloadSection(
                 state = updateDownloadState,
