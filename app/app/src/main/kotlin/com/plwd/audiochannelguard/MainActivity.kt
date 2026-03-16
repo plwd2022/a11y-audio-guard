@@ -51,6 +51,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -452,12 +454,17 @@ private fun AudioGuardScreen() {
             refreshState()
         }
     }
-    val statusText = guardStatusToText(status)
     val statusTitle = guardStatusTitle(serviceRunning, status)
     val statusSummary = guardStatusSummary(serviceRunning, status, headsetName)
     val showQuickFixAction = serviceRunning &&
         (status == GuardStatus.HIJACKED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE)
     val showTilePrompt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !tileAdded
+    val runtimeHintMessage = if (canManualReleaseHeldRoute) null else heldRouteMessage
+    val toolsSubtitle = if (tileAdded) {
+        "控制中心磁贴已添加，可在通知栏快捷开启或关闭保护。"
+    } else {
+        null
+    }
 
     Scaffold(
         topBar = {
@@ -490,7 +497,6 @@ private fun AudioGuardScreen() {
                     serviceRunning = serviceRunning,
                     statusTitle = statusTitle,
                     statusSummary = statusSummary,
-                    statusText = statusText,
                     showQuickFixAction = showQuickFixAction,
                     onToggle = guardToggleAction,
                     onQuickFix = {
@@ -501,14 +507,15 @@ private fun AudioGuardScreen() {
 
                 if (showTilePrompt) {
                     SectionSurface(
-                        title = "待处理事项",
-                        subtitle = "这些设置做好之后，日常使用会更顺手"
+                        title = "控制中心磁贴"
                     ) {
-                        Text(
-                            "还没有添加控制中心磁贴。添加后可在通知栏快捷开启或关闭保护，无需打开应用。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        MergedTextBlock {
+                            Text(
+                                "还没有添加控制中心磁贴。添加后可在通知栏快捷开启或关闭保护，无需打开应用。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         OutlinedButton(
                             onClick = {
                                 val statusBarManager = context.getSystemService(StatusBarManager::class.java)
@@ -535,27 +542,50 @@ private fun AudioGuardScreen() {
 
                 if (serviceRunning) {
                     SectionSurface(
-                        title = "运行详情",
-                        subtitle = "只有保护开启后才显示设备和连接信息"
+                        title = "当前情况"
                     ) {
-                        LabeledValueText("读屏状态", statusText)
-                        LabeledValueText("增强状态", enhancedStateText)
-                        LabeledValueText("当前耳机", headsetName)
-                        LabeledValueText("系统通话设备", commDeviceName)
-                        heldRouteMessage?.let { message ->
+                        MergedTextBlock(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalSpacing = 6.dp
+                        ) {
                             Text(
-                                message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.primary
+                                "当前耳机：$headsetName",
+                                style = MaterialTheme.typography.bodyLarge
                             )
+                            Text(
+                                "增强保护：$enhancedStateText",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "系统当前设备：$commDeviceName",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            runtimeHintMessage?.let { message ->
+                                Text(
+                                    message,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
 
-                    SectionSurface(
-                        title = "故障处理",
-                        subtitle = "通常无需手动操作，仅在自动恢复不理想时使用"
-                    ) {
-                        if (canManualReleaseHeldRoute) {
+                    if (canManualReleaseHeldRoute) {
+                        SectionSurface(
+                            title = "进一步处理",
+                            subtitle = "仅在自动恢复不理想时再尝试"
+                        ) {
+                            heldRouteMessage?.let { message ->
+                                MergedTextBlock {
+                                    Text(
+                                        message,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
                             OutlinedButton(
                                 onClick = {
                                     AudioGuardService.requestReleaseHeldRoute(context)
@@ -569,22 +599,6 @@ private fun AudioGuardScreen() {
                                 Text("尝试解除外放占用")
                             }
                         }
-
-                        OutlinedButton(
-                            onClick = {
-                                AudioGuardService.getMonitor()?.fixNow()
-                                refreshState()
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("立即修复")
-                        }
-
-                        Text(
-                            "如当前使用正常请忽略，仅在读屏声音疑似外放时点击。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
 
@@ -643,7 +657,8 @@ private fun AudioGuardScreen() {
                 }
 
                 SectionSurface(
-                    title = "工具与信息"
+                    title = "工具与信息",
+                    subtitle = toolsSubtitle
                 ) {
                     OutlinedButton(
                         onClick = { showFixLogDialog = true },
@@ -659,11 +674,13 @@ private fun AudioGuardScreen() {
                     ) {
                         Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
                     }
-                    Text(
-                        "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    MergedTextBlock {
+                        Text(
+                            "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
 
                     UpdateDownloadSection(
                         state = updateDownloadState,
@@ -674,14 +691,6 @@ private fun AudioGuardScreen() {
                         onOpenReleasePage = { url -> openUpdateUrl(url) },
                         context = context
                     )
-
-                    if (tileAdded) {
-                        Text(
-                            "控制中心磁贴已添加，可在通知栏快速开启或关闭保护。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
 
                     OutlinedButton(
                         onClick = { showPermissionGuide = true },
@@ -707,7 +716,6 @@ private fun StatusSummaryCard(
     serviceRunning: Boolean,
     statusTitle: String,
     statusSummary: String,
-    statusText: String,
     showQuickFixAction: Boolean,
     onToggle: () -> Unit,
     onQuickFix: () -> Unit,
@@ -734,11 +742,11 @@ private fun StatusSummaryCard(
             ) {
                 Column(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text("保护读屏声音", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (serviceRunning) "当前已在后台保护读屏声音" else "开启后，如果读屏声音误外放，会自动收回耳机",
+                        "误外放时自动收回耳机",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -751,17 +759,12 @@ private fun StatusSummaryCard(
 
             HorizontalDivider()
 
-            Text(statusTitle, style = MaterialTheme.typography.titleLarge)
-            Text(
-                statusSummary,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            if (serviceRunning) {
+            MergedTextBlock(verticalSpacing = 6.dp) {
+                Text(statusTitle, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    "读屏状态：$statusText",
-                    style = MaterialTheme.typography.labelLarge
+                    statusSummary,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
@@ -772,13 +775,22 @@ private fun StatusSummaryCard(
                 ) {
                     Text("立即修复")
                 }
-                Text(
-                    "如当前使用正常请忽略，仅在读屏声音疑似外放时点击。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
         }
+    }
+}
+
+@Composable
+private fun MergedTextBlock(
+    modifier: Modifier = Modifier,
+    verticalSpacing: Dp = 4.dp,
+    content: @Composable () -> Unit,
+) {
+    Column(
+        modifier = modifier.semantics(mergeDescendants = true) { },
+        verticalArrangement = Arrangement.spacedBy(verticalSpacing)
+    ) {
+        content()
     }
 }
 
@@ -797,13 +809,15 @@ private fun SectionSurface(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            subtitle?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            MergedTextBlock(verticalSpacing = 2.dp) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                subtitle?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
             content()
         }
@@ -846,30 +860,12 @@ private fun SettingsToggleRow(
     }
 }
 
-@Composable
-private fun LabeledValueText(label: String, value: String) {
-    Text(
-        "$label：$value",
-        style = MaterialTheme.typography.bodyLarge
-    )
-}
-
-private fun guardStatusToText(status: GuardStatus): String {
-    return when (status) {
-        GuardStatus.NORMAL -> "正在耳机中"
-        GuardStatus.FIXED -> "已收回到耳机"
-        GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已收回到耳机（如正常请忽略）"
-        GuardStatus.HIJACKED -> "疑似外放"
-        GuardStatus.NO_HEADSET -> "无耳机"
-    }
-}
-
 private fun guardStatusTitle(serviceRunning: Boolean, status: GuardStatus): String {
     return when {
         !serviceRunning -> "保护已关闭"
         status == GuardStatus.HIJACKED -> "检测到读屏声音可能外放"
         status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已将读屏声音收回耳机"
-        status == GuardStatus.NO_HEADSET -> "保护已开启"
+        status == GuardStatus.NO_HEADSET -> "当前未接入耳机"
         else -> "读屏声音正在耳机中"
     }
 }
@@ -880,7 +876,7 @@ private fun guardStatusSummary(
     headsetName: String,
 ): String {
     if (!serviceRunning) {
-        return "开启后，如果读屏声音误跑到扬声器，应用会自动把声音收回耳机。关闭时不会显示设备和连接详情。"
+        return "开启后，如果读屏声音误外放，应用会自动把声音收回耳机。"
     }
 
     return when (status) {
@@ -904,10 +900,10 @@ private fun guardStatusSummary(
             "读屏声音已经收回耳机，如当前听起来正常请忽略。"
 
         GuardStatus.HIJACKED ->
-            "当前读屏声音可能仍在扬声器外放，如确有异常可立即修复。"
+            "当前读屏声音可能仍在扬声器外放，如你现在确实听到外放，可立即修复。"
 
         GuardStatus.NO_HEADSET ->
-            "当前未检测到耳机，接入耳机后会自动开始保护。"
+            "接入耳机后会自动开始保护。"
     }
 }
 
@@ -1168,12 +1164,14 @@ private fun UpdateDownloadSection(
 
     when (state) {
         is UpdateDownloadState.Pending -> {
-            Text("更新下载：准备中", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "正在准备下载 ${state.updateInfo.latestVersionName}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            MergedTextBlock(verticalSpacing = 6.dp) {
+                Text("更新下载：准备中", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "正在准备下载 ${state.updateInfo.latestVersionName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             OutlinedButton(
                 onClick = onCancelOrClear,
                 modifier = Modifier.fillMaxWidth()
@@ -1184,24 +1182,26 @@ private fun UpdateDownloadSection(
 
         is UpdateDownloadState.Downloading -> {
             val percent = (state.progress * 100).toInt().coerceIn(0, 100)
-            Text("更新下载中", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "版本：${state.updateInfo.latestVersionName}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            MergedTextBlock(verticalSpacing = 6.dp) {
+                Text("更新下载中", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "版本：${state.updateInfo.latestVersionName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "${formatSize(context, state.downloadedBytes)} / ${formatSizeOrUnknown(context, state.totalBytes)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "进度：$percent%  速度：${formatSpeed(context, state.speedBytes)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             LinearProgressIndicator(
                 progress = { state.progress.coerceIn(0f, 1f) },
                 modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                "${formatSize(context, state.downloadedBytes)} / ${formatSizeOrUnknown(context, state.totalBytes)}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "进度：$percent%  速度：${formatSpeed(context, state.speedBytes)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             OutlinedButton(
                 onClick = onCancelOrClear,
@@ -1212,25 +1212,27 @@ private fun UpdateDownloadSection(
         }
 
         is UpdateDownloadState.Completed -> {
-            Text("更新包已下载", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "版本：${state.updateInfo.latestVersionName}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                "安装包：${state.updateInfo.apkFileName}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "大小：${Formatter.formatFileSize(context, state.updateInfo.apkSizeBytes)}",
-                style = MaterialTheme.typography.bodySmall
-            )
-            Text(
-                "安装成功后会自动清理旧安装包。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            MergedTextBlock(verticalSpacing = 6.dp) {
+                Text("更新包已下载", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "版本：${state.updateInfo.latestVersionName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "安装包：${state.updateInfo.apkFileName}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "大小：${Formatter.formatFileSize(context, state.updateInfo.apkSizeBytes)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    "安装成功后会自动清理旧安装包。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Button(
                 onClick = onInstall,
                 modifier = Modifier.fillMaxWidth()
@@ -1252,19 +1254,21 @@ private fun UpdateDownloadSection(
         }
 
         is UpdateDownloadState.Failed -> {
-            Text("更新下载失败", style = MaterialTheme.typography.titleMedium)
-            state.updateInfo?.let { updateInfo ->
+            MergedTextBlock(verticalSpacing = 6.dp) {
+                Text("更新下载失败", style = MaterialTheme.typography.titleMedium)
+                state.updateInfo?.let { updateInfo ->
+                    Text(
+                        "版本：${updateInfo.latestVersionName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 Text(
-                    "版本：${updateInfo.latestVersionName}",
+                    state.message,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Text(
-                state.message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
             Button(
                 onClick = onRetry,
                 enabled = !isStartingDownload,
