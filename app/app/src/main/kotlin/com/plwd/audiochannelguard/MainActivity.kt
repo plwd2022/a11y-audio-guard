@@ -32,6 +32,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -442,6 +443,35 @@ private fun AudioGuardScreen() {
         )
     }
 
+    val toggleDesc = "启用守护。开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行"
+    val guardToggleAction: () -> Unit = {
+        val enabled = !serviceRunning
+        serviceRunning = enabled
+        AudioGuardApp.setGuardEnabled(context, enabled)
+        if (enabled) {
+            AudioGuardService.start(context)
+            ServiceGuard.schedulePeriodicCheck(context)
+        } else {
+            AudioGuardService.stop(context)
+        }
+        scope.launch {
+            delay(500)
+            refreshState()
+        }
+    }
+    val enhancedToggleDesc =
+        "增强守护（实验性）。一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为"
+    val classicBluetoothWidebandToggleDesc =
+        "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效"
+    val classicBluetoothSoftGuardToggleDesc =
+        "经典蓝牙保真守护（实验性）。仅对经典蓝牙耳机生效。检测到疑似劫持或手动解除接管时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰"
+    val statusText = guardStatusToText(status)
+    val statusTitle = guardStatusTitle(serviceRunning, status)
+    val statusSummary = guardStatusSummary(serviceRunning, status, headsetName)
+    val showQuickFixAction = serviceRunning &&
+        (status == GuardStatus.HIJACKED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE)
+    val showTilePrompt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !tileAdded
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -455,12 +485,11 @@ private fun AudioGuardScreen() {
                 .padding(padding),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // 权限警告条
             PermissionWarningBar(
                 showWarning = showPermissionWarning,
                 onClick = { showPermissionGuide = true }
             )
-            
+
             Column(
                 modifier = Modifier
                     .weight(1f)
@@ -470,27 +499,253 @@ private fun AudioGuardScreen() {
                     .padding(horizontal = 16.dp, vertical = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-            val toggleDesc = "启用守护。开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行"
-            val guardToggleAction = {
-                val enabled = !serviceRunning
-                serviceRunning = enabled
-                AudioGuardApp.setGuardEnabled(context, enabled)
-                if (enabled) {
-                    AudioGuardService.start(context)
-                    ServiceGuard.schedulePeriodicCheck(context)
-                } else {
-                    AudioGuardService.stop(context)
+                StatusSummaryCard(
+                    serviceRunning = serviceRunning,
+                    toggleDescription = toggleDesc,
+                    statusTitle = statusTitle,
+                    statusSummary = statusSummary,
+                    statusText = statusText,
+                    showQuickFixAction = showQuickFixAction,
+                    onToggle = guardToggleAction,
+                    onQuickFix = {
+                        AudioGuardService.getMonitor()?.fixNow()
+                        refreshState()
+                    }
+                )
+
+                if (showTilePrompt) {
+                    SectionSurface(
+                        title = "待处理事项",
+                        subtitle = "这些设置做好之后，日常使用会更顺手"
+                    ) {
+                        Text(
+                            "还没有添加控制中心磁贴。添加后可在通知栏快捷设置里直接查看守护状态，并快速开启或关闭守护。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        OutlinedButton(
+                            onClick = {
+                                val statusBarManager = context.getSystemService(StatusBarManager::class.java)
+                                statusBarManager.requestAddTileService(
+                                    ComponentName(context, AudioFixTile::class.java),
+                                    context.getString(R.string.tile_label),
+                                    Icon.createWithResource(context, R.drawable.ic_headset),
+                                    context.mainExecutor
+                                ) { resultCode ->
+                                    if (resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
+                                        resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
+                                    ) {
+                                        tileAdded = true
+                                        AudioGuardApp.setTileAdded(context, true)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("添加控制中心磁贴")
+                        }
+                    }
                 }
-                scope.launch {
-                    delay(500)
-                    refreshState()
+
+                if (serviceRunning) {
+                    SectionSurface(
+                        title = "运行详情",
+                        subtitle = "只有守护开启后才显示设备和连接信息"
+                    ) {
+                        LabeledValueText("当前状态", statusText)
+                        LabeledValueText("增强状态", enhancedStateText)
+                        LabeledValueText("输出设备", headsetName)
+                        LabeledValueText("通信设备", commDeviceName)
+                        heldRouteMessage?.let { message ->
+                            Text(
+                                message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+
+                    SectionSurface(
+                        title = "故障处理",
+                        subtitle = "通常无需手动操作，仅在自动恢复不理想时使用"
+                    ) {
+                        if (canManualReleaseHeldRoute) {
+                            OutlinedButton(
+                                onClick = {
+                                    AudioGuardService.requestReleaseHeldRoute(context)
+                                    scope.launch {
+                                        delay(700)
+                                        refreshState()
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("尝试解除限制")
+                            }
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                AudioGuardService.getMonitor()?.fixNow()
+                                refreshState()
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("手动触发")
+                        }
+
+                        if (status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
+                            Text(
+                                "如使用正常请忽略，如仍有异常再尝试手动触发。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                SectionSurface(
+                    title = "高级与实验功能",
+                    subtitle = "一般情况下无需调整，只有普通守护不够时再尝试"
+                ) {
+                    SettingsToggleRow(
+                        checked = enhancedEnabled,
+                        title = "增强守护（实验性）",
+                        summary = "仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为",
+                        contentDescription = enhancedToggleDesc,
+                        onToggle = { enabled ->
+                            enhancedEnabled = enabled
+                            AudioGuardApp.setEnhancedModeEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setEnhancedModeEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    SettingsToggleRow(
+                        checked = classicBluetoothSoftGuardEnabled,
+                        title = "经典蓝牙保真守护（实验性）",
+                        summary = "仅对经典蓝牙耳机生效。会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
+                        contentDescription = classicBluetoothSoftGuardToggleDesc,
+                        onToggle = { enabled ->
+                            classicBluetoothSoftGuardEnabled = enabled
+                            AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setClassicBluetoothSoftGuardEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    SettingsToggleRow(
+                        checked = classicBluetoothWidebandEnabled,
+                        title = "经典蓝牙更清晰通话音质（实验性）",
+                        summary = "仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质，部分机型可能无效",
+                        contentDescription = classicBluetoothWidebandToggleDesc,
+                        onToggle = { enabled ->
+                            classicBluetoothWidebandEnabled = enabled
+                            AudioGuardApp.setClassicBluetoothWidebandEnabled(context, enabled)
+                            AudioGuardService.getMonitor()?.setClassicBluetoothWidebandEnabled(enabled)
+                            scope.launch {
+                                delay(300)
+                                refreshState()
+                            }
+                        }
+                    )
+                }
+
+                SectionSurface(
+                    title = "工具与信息"
+                ) {
+                    OutlinedButton(
+                        onClick = { showFixLogDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("查看日志")
+                    }
+
+                    OutlinedButton(
+                        onClick = { launchUpdateCheck() },
+                        enabled = !isCheckingUpdate,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
+                    }
+                    Text(
+                        "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    UpdateDownloadSection(
+                        state = updateDownloadState,
+                        isStartingDownload = isStartingBuiltinDownload,
+                        onRetry = { retryBuiltInDownload() },
+                        onCancelOrClear = { cancelBuiltInDownload() },
+                        onInstall = { installBuiltInDownloadedPackage() },
+                        onOpenReleasePage = { url -> openUpdateUrl(url) },
+                        context = context
+                    )
+
+                    if (tileAdded) {
+                        Text(
+                            "控制中心磁贴已添加，可在通知栏快捷设置中直接查看守护状态。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = { showPermissionGuide = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("权限设置")
+                    }
+
+                    OutlinedButton(
+                        onClick = { showAbout = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("关于本软件")
+                    }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun StatusSummaryCard(
+    serviceRunning: Boolean,
+    toggleDescription: String,
+    statusTitle: String,
+    statusSummary: String,
+    statusText: String,
+    showQuickFixAction: Boolean,
+    onToggle: () -> Unit,
+    onQuickFix: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics(mergeDescendants = true) {
-                        contentDescription = toggleDesc
+                        contentDescription = toggleDescription
                         role = Role.Switch
                         toggleableState = ToggleableState(serviceRunning)
                         stateDescription = if (serviceRunning) "已开启" else "已关闭"
@@ -498,7 +753,7 @@ private fun AudioGuardScreen() {
                     .toggleable(
                         value = serviceRunning,
                         role = Role.Switch,
-                        onValueChange = { guardToggleAction() }
+                        onValueChange = { onToggle() }
                     ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -509,7 +764,7 @@ private fun AudioGuardScreen() {
                 ) {
                     Text("启用守护", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行",
+                        if (serviceRunning) "当前已在后台守护通信声道" else "开启后会在后台自动守护通信声道",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -520,279 +775,167 @@ private fun AudioGuardScreen() {
                 )
             }
 
-            val enhancedToggleDesc = "增强守护（实验性）。一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = enhancedToggleDesc
-                        role = Role.Switch
-                        toggleableState = ToggleableState(enhancedEnabled)
-                        stateDescription = if (enhancedEnabled) "已开启" else "已关闭"
-                    }
-                    .toggleable(
-                        value = enhancedEnabled,
-                        role = Role.Switch,
-                        onValueChange = { enabled ->
-                            enhancedEnabled = enabled
-                            AudioGuardApp.setEnhancedModeEnabled(context, enabled)
-                            AudioGuardService.getMonitor()?.setEnhancedModeEnabled(enabled)
-                            scope.launch {
-                                delay(300)
-                                refreshState()
-                            }
-                        }
-                    ),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("增强守护（实验性）", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = enhancedEnabled,
-                    onCheckedChange = null
-                )
-            }
-
-            val classicBluetoothWidebandToggleDesc =
-                "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效"
-            val classicBluetoothSoftGuardToggleDesc =
-                "经典蓝牙保真守护（实验性）。仅对经典蓝牙耳机生效。检测到疑似劫持或手动解除接管时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰"
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = classicBluetoothSoftGuardToggleDesc
-                        role = Role.Switch
-                        toggleableState = ToggleableState(classicBluetoothSoftGuardEnabled)
-                        stateDescription = if (classicBluetoothSoftGuardEnabled) "已开启" else "已关闭"
-                    }
-                    .toggleable(
-                        value = classicBluetoothSoftGuardEnabled,
-                        role = Role.Switch,
-                        onValueChange = { enabled ->
-                            classicBluetoothSoftGuardEnabled = enabled
-                            AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)
-                            AudioGuardService.getMonitor()?.setClassicBluetoothSoftGuardEnabled(enabled)
-                            scope.launch {
-                                delay(300)
-                                refreshState()
-                            }
-                        }
-                    ),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("经典蓝牙保真守护（实验性）", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "仅对经典蓝牙耳机生效。检测到疑似劫持或手动解除接管时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = classicBluetoothSoftGuardEnabled,
-                    onCheckedChange = null
-                )
-            }
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = classicBluetoothWidebandToggleDesc
-                        role = Role.Switch
-                        toggleableState = ToggleableState(classicBluetoothWidebandEnabled)
-                        stateDescription = if (classicBluetoothWidebandEnabled) "已开启" else "已关闭"
-                    }
-                    .toggleable(
-                        value = classicBluetoothWidebandEnabled,
-                        role = Role.Switch,
-                        onValueChange = { enabled ->
-                            classicBluetoothWidebandEnabled = enabled
-                            AudioGuardApp.setClassicBluetoothWidebandEnabled(context, enabled)
-                            AudioGuardService.getMonitor()?.setClassicBluetoothWidebandEnabled(enabled)
-                            scope.launch {
-                                delay(300)
-                                refreshState()
-                            }
-                        }
-                    ),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text("经典蓝牙更清晰通话音质（实验性）", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Switch(
-                    checked = classicBluetoothWidebandEnabled,
-                    onCheckedChange = null
-                )
-            }
-
             HorizontalDivider()
 
-            val statusText = when (status) {
-                GuardStatus.NORMAL -> "正常"
-                GuardStatus.FIXED -> "已修复"
-                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已修复（其他应用可能仍占用扬声器路由）"
-                GuardStatus.HIJACKED -> "待修复"
-                GuardStatus.NO_HEADSET -> "无耳机"
-            }
-            Text("当前状态：$statusText", style = MaterialTheme.typography.bodyLarge)
-            if (status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
-                Text(
-                    "如使用正常请忽略，如仍有异常请点击手动触发",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Text("增强状态：$enhancedStateText", style = MaterialTheme.typography.bodyLarge)
-            Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
-            Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)
-            heldRouteMessage?.let { message ->
-                Text(
-                    message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            if (canManualReleaseHeldRoute) {
-                OutlinedButton(
-                    onClick = {
-                        AudioGuardService.requestReleaseHeldRoute(context)
-                        scope.launch {
-                            delay(700)
-                            refreshState()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("尝试解除限制")
-                }
-            }
-
-            Button(
-                onClick = {
-                    AudioGuardService.getMonitor()?.fixNow()
-                    refreshState()
-                },
-                enabled = serviceRunning
-            ) {
-                Text("手动触发")
-            }
+            Text(statusTitle, style = MaterialTheme.typography.titleLarge)
             Text(
-                "通常无需手动操作，仅在声道未自动恢复时点击",
-                style = MaterialTheme.typography.bodySmall,
+                statusSummary,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            HorizontalDivider()
-
-            OutlinedButton(
-                onClick = { showFixLogDialog = true },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("查看日志")
-            }
-
-            OutlinedButton(
-                onClick = { launchUpdateCheck() },
-                enabled = !isCheckingUpdate,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
-            }
-            Text(
-                "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            UpdateDownloadSection(
-                state = updateDownloadState,
-                isStartingDownload = isStartingBuiltinDownload,
-                onRetry = { retryBuiltInDownload() },
-                onCancelOrClear = { cancelBuiltInDownload() },
-                onInstall = { installBuiltInDownloadedPackage() },
-                onOpenReleasePage = { url -> openUpdateUrl(url) },
-                context = context
-            )
-
-            // 快捷设置磁贴
-            if (tileAdded) {
+            if (serviceRunning) {
                 Text(
-                    "已添加控制中心磁贴，可在通知栏快捷设置中查看守护状态，并快速开启或关闭守护",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    "当前状态：$statusText",
+                    style = MaterialTheme.typography.labelLarge
                 )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                OutlinedButton(
-                    onClick = {
-                        val statusBarManager = context.getSystemService(StatusBarManager::class.java)
-                        statusBarManager.requestAddTileService(
-                            ComponentName(context, AudioFixTile::class.java),
-                            context.getString(R.string.tile_label),
-                            Icon.createWithResource(context, R.drawable.ic_headset),
-                            context.mainExecutor
-                        ) { resultCode ->
-                            if (resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ADDED ||
-                                resultCode == StatusBarManager.TILE_ADD_REQUEST_RESULT_TILE_ALREADY_ADDED
-                            ) {
-                                tileAdded = true
-                                AudioGuardApp.setTileAdded(context, true)
-                            }
-                        }
-                    },
+            }
+
+            if (showQuickFixAction) {
+                Button(
+                    onClick = onQuickFix,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("添加控制中心磁贴")
+                    Text("立即恢复")
                 }
-                Text(
-                    "添加后可在通知栏快捷设置中直接查看当前状态，并快速开启或关闭守护",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            // 权限设置按钮
-            OutlinedButton(
-                onClick = { showPermissionGuide = true },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("权限设置")
-            }
-
-            OutlinedButton(
-                onClick = { showAbout = true },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("关于本软件")
             }
         }
+    }
+}
+
+@Composable
+private fun SectionSurface(
+    title: String,
+    subtitle: String? = null,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            subtitle?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
+            content()
+        }
+    }
+}
+
+@Composable
+private fun SettingsToggleRow(
+    checked: Boolean,
+    title: String,
+    summary: String,
+    contentDescription: String,
+    onToggle: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                this.contentDescription = contentDescription
+                role = Role.Switch
+                toggleableState = ToggleableState(checked)
+                stateDescription = if (checked) "已开启" else "已关闭"
+            }
+            .toggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onToggle
+            ),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = null
+        )
+    }
+}
+
+@Composable
+private fun LabeledValueText(label: String, value: String) {
+    Text(
+        "$label：$value",
+        style = MaterialTheme.typography.bodyLarge
+    )
+}
+
+private fun guardStatusToText(status: GuardStatus): String {
+    return when (status) {
+        GuardStatus.NORMAL -> "正常"
+        GuardStatus.FIXED -> "已修复"
+        GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已修复（其他应用可能仍占用扬声器路由）"
+        GuardStatus.HIJACKED -> "待修复"
+        GuardStatus.NO_HEADSET -> "无耳机"
+    }
+}
+
+private fun guardStatusTitle(serviceRunning: Boolean, status: GuardStatus): String {
+    return when {
+        !serviceRunning -> "守护已关闭"
+        status == GuardStatus.HIJACKED -> "检测到声道异常"
+        status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已经尝试恢复"
+        status == GuardStatus.NO_HEADSET -> "守护已开启"
+        else -> "守护运行中"
+    }
+}
+
+private fun guardStatusSummary(
+    serviceRunning: Boolean,
+    status: GuardStatus,
+    headsetName: String,
+): String {
+    if (!serviceRunning) {
+        return "开启后会在后台自动守护通信声道。关闭时不会显示设备和连接详情。"
+    }
+
+    return when (status) {
+        GuardStatus.NORMAL -> {
+            if (headsetName != "无" && headsetName != "未连接") {
+                "当前正在守护 $headsetName，可继续正常使用。"
+            } else {
+                "守护已开启，正在后台观察通信声道。"
+            }
+        }
+
+        GuardStatus.FIXED -> {
+            if (headsetName != "无" && headsetName != "未连接") {
+                "最近一次异常已经恢复到 $headsetName。"
+            } else {
+                "最近一次异常已经恢复。"
+            }
+        }
+
+        GuardStatus.FIXED_BUT_SPEAKER_ROUTE ->
+            "声道已经恢复，但其他应用可能仍占用扬声器路由。"
+
+        GuardStatus.HIJACKED ->
+            "当前通信声道仍停在内置设备，如听感异常可立即恢复。"
+
+        GuardStatus.NO_HEADSET ->
+            "当前未检测到耳机，接入耳机后会自动开始守护。"
     }
 }
 
