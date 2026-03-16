@@ -153,7 +153,7 @@ fun PermissionGuideDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    text = "为确保声道守护功能正常运行，需要以下权限：",
+                    text = "为确保读屏声音保护功能正常运行，需要以下权限：",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

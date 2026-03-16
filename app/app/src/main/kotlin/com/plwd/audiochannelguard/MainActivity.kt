@@ -443,7 +443,7 @@ private fun AudioGuardScreen() {
         )
     }
 
-    val toggleDesc = "启用守护。开启并配置好权限后，放到后台即可自动守护。即使后台被清理，也会自动恢复运行"
+    val toggleDesc = "保护读屏声音。开启后，如果读屏声音误跑到扬声器，应用会自动把声音收回耳机。"
     val guardToggleAction: () -> Unit = {
         val enabled = !serviceRunning
         serviceRunning = enabled
@@ -460,11 +460,11 @@ private fun AudioGuardScreen() {
         }
     }
     val enhancedToggleDesc =
-        "增强守护（实验性）。一般情况下无需开启。仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为"
+        "增强保护（实验性）。开启后，软件会更主动地接管可能影响读屏播报的声音路径，尽量不让其他应用抢走。这样通常更稳，但可能影响外放、部分语音场景，并可能造成蓝牙音质持续处于窄带音质或者出现音质损失"
     val classicBluetoothWidebandToggleDesc =
-        "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质；不等于音乐播放音质，部分机型可能无效"
+        "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。第三方应用不释放蓝牙占用时，为了持续保护读屏声音，系统可能退到通话音质。开启后会尽量让这段通话音质更清晰；解除持续保护后会恢复正常"
     val classicBluetoothSoftGuardToggleDesc =
-        "经典蓝牙保真守护（实验性）。仅对经典蓝牙耳机生效。检测到疑似劫持或手动解除接管时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰"
+        "经典蓝牙保真保护（实验性）。仅对经典蓝牙耳机生效。检测到疑似外放或尝试解除占用时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰"
     val statusText = guardStatusToText(status)
     val statusTitle = guardStatusTitle(serviceRunning, status)
     val statusSummary = guardStatusSummary(serviceRunning, status, headsetName)
@@ -519,7 +519,7 @@ private fun AudioGuardScreen() {
                         subtitle = "这些设置做好之后，日常使用会更顺手"
                     ) {
                         Text(
-                            "还没有添加控制中心磁贴。添加后可在通知栏快捷设置里直接查看守护状态，并快速开启或关闭守护。",
+                            "还没有添加控制中心磁贴。添加后可在通知栏快捷开启或关闭保护，无需打开应用。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -550,12 +550,12 @@ private fun AudioGuardScreen() {
                 if (serviceRunning) {
                     SectionSurface(
                         title = "运行详情",
-                        subtitle = "只有守护开启后才显示设备和连接信息"
+                        subtitle = "只有保护开启后才显示设备和连接信息"
                     ) {
-                        LabeledValueText("当前状态", statusText)
+                        LabeledValueText("读屏状态", statusText)
                         LabeledValueText("增强状态", enhancedStateText)
-                        LabeledValueText("输出设备", headsetName)
-                        LabeledValueText("通信设备", commDeviceName)
+                        LabeledValueText("当前耳机", headsetName)
+                        LabeledValueText("系统通话设备", commDeviceName)
                         heldRouteMessage?.let { message ->
                             Text(
                                 message,
@@ -580,7 +580,7 @@ private fun AudioGuardScreen() {
                                 },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text("尝试解除限制")
+                                Text("尝试解除外放占用")
                             }
                         }
 
@@ -591,27 +591,25 @@ private fun AudioGuardScreen() {
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("手动触发")
+                            Text("立即修复")
                         }
 
-                        if (status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
-                            Text(
-                                "如使用正常请忽略，如仍有异常再尝试手动触发。",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Text(
+                            "如当前使用正常请忽略，仅在读屏声音疑似外放时点击。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
                 }
 
                 SectionSurface(
                     title = "高级与实验功能",
-                    subtitle = "一般情况下无需调整，只有普通守护不够时再尝试"
+                    subtitle = "一般情况下无需调整，只有普通保护不够时再尝试"
                 ) {
                     SettingsToggleRow(
                         checked = enhancedEnabled,
-                        title = "增强守护（实验性）",
-                        summary = "仅当普通守护无法解决问题时尝试，开启后可能影响外放和通话音量行为",
+                        title = "增强保护（实验性）",
+                        summary = "开启后会更主动地接管可能影响读屏播报的声音路径，尽量不让其他应用抢走。这样通常更稳，但可能影响外放、部分语音场景，并可能造成蓝牙音质持续处于窄带音质或者出现音质损失",
                         contentDescription = enhancedToggleDesc,
                         onToggle = { enabled ->
                             enhancedEnabled = enabled
@@ -628,7 +626,7 @@ private fun AudioGuardScreen() {
 
                     SettingsToggleRow(
                         checked = classicBluetoothSoftGuardEnabled,
-                        title = "经典蓝牙保真守护（实验性）",
+                        title = "经典蓝牙保真保护（实验性）",
                         summary = "仅对经典蓝牙耳机生效。会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
                         contentDescription = classicBluetoothSoftGuardToggleDesc,
                         onToggle = { enabled ->
@@ -647,7 +645,7 @@ private fun AudioGuardScreen() {
                     SettingsToggleRow(
                         checked = classicBluetoothWidebandEnabled,
                         title = "经典蓝牙更清晰通话音质（实验性）",
-                        summary = "仅对经典蓝牙耳机生效。修复通信路由后，会尝试争取更清晰的通话音质，部分机型可能无效",
+                        summary = "仅对经典蓝牙耳机生效。第三方应用不释放蓝牙占用时，为了持续保护读屏声音，系统可能退到通话音质。开启后会尽量让这段通话音质更清晰；解除持续保护后会恢复正常",
                         contentDescription = classicBluetoothWidebandToggleDesc,
                         onToggle = { enabled ->
                             classicBluetoothWidebandEnabled = enabled
@@ -668,7 +666,7 @@ private fun AudioGuardScreen() {
                         onClick = { showFixLogDialog = true },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("查看日志")
+                        Text("查看保护记录")
                     }
 
                     OutlinedButton(
@@ -696,7 +694,7 @@ private fun AudioGuardScreen() {
 
                     if (tileAdded) {
                         Text(
-                            "控制中心磁贴已添加，可在通知栏快捷设置中直接查看守护状态。",
+                            "控制中心磁贴已添加，可在通知栏快速开启或关闭保护。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -762,9 +760,9 @@ private fun StatusSummaryCard(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Text("启用守护", style = MaterialTheme.typography.titleMedium)
+                    Text("保护读屏声音", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (serviceRunning) "当前已在后台守护通信声道" else "开启后会在后台自动守护通信声道",
+                        if (serviceRunning) "当前已在后台保护读屏声音" else "开启后，如果读屏声音误外放，会自动收回耳机",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -786,7 +784,7 @@ private fun StatusSummaryCard(
 
             if (serviceRunning) {
                 Text(
-                    "当前状态：$statusText",
+                    "读屏状态：$statusText",
                     style = MaterialTheme.typography.labelLarge
                 )
             }
@@ -796,8 +794,13 @@ private fun StatusSummaryCard(
                     onClick = onQuickFix,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("立即恢复")
+                    Text("立即修复")
                 }
+                Text(
+                    "如当前使用正常请忽略，仅在读屏声音疑似外放时点击。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -884,21 +887,21 @@ private fun LabeledValueText(label: String, value: String) {
 
 private fun guardStatusToText(status: GuardStatus): String {
     return when (status) {
-        GuardStatus.NORMAL -> "正常"
-        GuardStatus.FIXED -> "已修复"
-        GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已修复（其他应用可能仍占用扬声器路由）"
-        GuardStatus.HIJACKED -> "待修复"
+        GuardStatus.NORMAL -> "正在耳机中"
+        GuardStatus.FIXED -> "已收回到耳机"
+        GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已收回到耳机（如正常请忽略）"
+        GuardStatus.HIJACKED -> "疑似外放"
         GuardStatus.NO_HEADSET -> "无耳机"
     }
 }
 
 private fun guardStatusTitle(serviceRunning: Boolean, status: GuardStatus): String {
     return when {
-        !serviceRunning -> "守护已关闭"
-        status == GuardStatus.HIJACKED -> "检测到声道异常"
-        status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已经尝试恢复"
-        status == GuardStatus.NO_HEADSET -> "守护已开启"
-        else -> "守护运行中"
+        !serviceRunning -> "保护已关闭"
+        status == GuardStatus.HIJACKED -> "检测到读屏声音可能外放"
+        status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已将读屏声音收回耳机"
+        status == GuardStatus.NO_HEADSET -> "保护已开启"
+        else -> "读屏声音正在耳机中"
     }
 }
 
@@ -908,34 +911,34 @@ private fun guardStatusSummary(
     headsetName: String,
 ): String {
     if (!serviceRunning) {
-        return "开启后会在后台自动守护通信声道。关闭时不会显示设备和连接详情。"
+        return "开启后，如果读屏声音误跑到扬声器，应用会自动把声音收回耳机。关闭时不会显示设备和连接详情。"
     }
 
     return when (status) {
         GuardStatus.NORMAL -> {
             if (headsetName != "无" && headsetName != "未连接") {
-                "当前正在守护 $headsetName，可继续正常使用。"
+                "当前读屏声音正在 $headsetName 中，可继续正常使用。"
             } else {
-                "守护已开启，正在后台观察通信声道。"
+                "保护已开启，正在后台观察读屏声音是否误外放。"
             }
         }
 
         GuardStatus.FIXED -> {
             if (headsetName != "无" && headsetName != "未连接") {
-                "最近一次异常已经恢复到 $headsetName。"
+                "最近一次异常已经把读屏声音收回到 $headsetName。"
             } else {
-                "最近一次异常已经恢复。"
+                "最近一次异常已经把读屏声音收回耳机。"
             }
         }
 
         GuardStatus.FIXED_BUT_SPEAKER_ROUTE ->
-            "声道已经恢复，但其他应用可能仍占用扬声器路由。"
+            "读屏声音已经收回耳机，如当前听起来正常请忽略。"
 
         GuardStatus.HIJACKED ->
-            "当前通信声道仍停在内置设备，如听感异常可立即恢复。"
+            "当前读屏声音可能仍在扬声器外放，如确有异常可立即修复。"
 
         GuardStatus.NO_HEADSET ->
-            "当前未检测到耳机，接入耳机后会自动开始守护。"
+            "当前未检测到耳机，接入耳机后会自动开始保护。"
     }
 }
 
@@ -943,7 +946,7 @@ private fun enhancedStateToText(state: EnhancedState): String {
     return when (state) {
         EnhancedState.DISABLED -> "已关闭"
         EnhancedState.WAITING_HEADSET -> "等待耳机"
-        EnhancedState.ACTIVE -> "增强中"
+        EnhancedState.ACTIVE -> "增强保护中"
         EnhancedState.CLEAR_PROBE -> "观察中"
         EnhancedState.SUSPENDED_BY_CALL -> "通话暂停"
     }
@@ -968,15 +971,15 @@ private fun AboutDialog(
                 Text(
                     "Android 13 起，部分应用（如抖音、微信）在播放语音消息时" +
                     "调用 setSpeakerphoneOn(true)，播放结束后未释放，" +
-                    "导致通信音频流被锁定在内置扬声器。TalkBack 等屏幕阅读器的语音输出因此被劫持，" +
+                    "导致读屏语音被错误切到内置扬声器。TalkBack 等屏幕阅读器的声音因此可能误外放，" +
                     "严重影响依赖耳机的视障用户。"
                 )
 
                 Text("工作原理", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "通过 OnCommunicationDeviceChangedListener 实时监听通信设备变更，" +
-                    "当检测到通信设备被异常切换至内置扬声器且有耳机连接时，" +
-                    "自动调用 setCommunicationDevice() 将音频路由恢复至耳机。\n\n" +
+                    "当检测到读屏声音可能被异常切换到内置扬声器且有耳机连接时，" +
+                    "自动调用 setCommunicationDevice() 将读屏声音优先拉回耳机。\n\n" +
                     "支持设备类型：USB 耳机、有线耳机/耳麦、蓝牙 A2DP/SCO、BLE 音频设备。"
                 )
 
@@ -1033,7 +1036,7 @@ private fun FixLogDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("修复记录") },
+        title = { Text("保护记录") },
         text = {
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
@@ -1041,7 +1044,7 @@ private fun FixLogDialog(
             ) {
                 if (fixLog.isEmpty()) {
                     Text(
-                        "暂无记录",
+                        "暂时没有保护记录",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

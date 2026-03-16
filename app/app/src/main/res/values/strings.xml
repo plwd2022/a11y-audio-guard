@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">无障碍声道守护</string>
-    <string name="tile_label">声道守护</string>
+    <string name="app_name">读屏声音保护</string>
+    <string name="tile_label">读屏保护</string>
 </resources>

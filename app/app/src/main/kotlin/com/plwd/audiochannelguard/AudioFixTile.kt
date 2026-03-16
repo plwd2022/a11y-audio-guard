@@ -87,25 +87,25 @@ class AudioFixTile : TileService() {
         if (!AudioGuardApp.isGuardEnabled(this)) {
             return TilePresentation(
                 state = Tile.STATE_INACTIVE,
-                subtitle = "未运行"
+                subtitle = "保护关闭"
             )
         }
 
         val monitor = AudioGuardService.getMonitor()
             ?: return TilePresentation(
                 state = Tile.STATE_ACTIVE,
-                subtitle = "启动中"
+                subtitle = "准备中"
             )
 
         val subtitle = when {
-            monitor.canManuallyReleaseHeldRoute() -> "已接管"
+            monitor.canManuallyReleaseHeldRoute() -> "外放占用"
             monitor.getHeldRouteMessage() != null -> "观察中"
             else -> when (monitor.getStatus()) {
-                GuardStatus.NORMAL -> monitor.findConnectedHeadset()?.productName?.toString() ?: "已开启"
-                GuardStatus.FIXED -> "已恢复"
-                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已恢复"
-                GuardStatus.HIJACKED -> "检测到劫持"
-                GuardStatus.NO_HEADSET -> "未连接耳机"
+                GuardStatus.NORMAL -> monitor.findConnectedHeadset()?.productName?.toString() ?: "保护中"
+                GuardStatus.FIXED -> "已收回"
+                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已收回"
+                GuardStatus.HIJACKED -> "疑似外放"
+                GuardStatus.NO_HEADSET -> "未接耳机"
             }
         }
 
