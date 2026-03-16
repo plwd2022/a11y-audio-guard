@@ -3,12 +3,14 @@ package com.plwd.audiochannelguard
 import android.Manifest
 import android.app.StatusBarManager
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.text.format.Formatter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -109,6 +111,8 @@ private fun AudioGuardScreen() {
     var headsetName by remember { mutableStateOf("无") }
     var heldRouteMessage by remember { mutableStateOf<String?>(null) }
     var canManualReleaseHeldRoute by remember { mutableStateOf(false) }
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var updateCheckResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
@@ -116,6 +120,8 @@ private fun AudioGuardScreen() {
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     val activity = context as? ComponentActivity
     val contentScrollState = rememberScrollState()
+    val currentVersionName = remember(context) { getInstalledVersionName(context) }
+    val updateChecker = remember(context) { UpdateChecker(context.applicationContext) }
 
     // 检查是否需要显示权限引导
     LaunchedEffect(Unit) {
@@ -149,6 +155,24 @@ private fun AudioGuardScreen() {
             headsetName = "未连接"
             heldRouteMessage = null
             canManualReleaseHeldRoute = false
+        }
+    }
+
+    fun launchUpdateCheck() {
+        if (isCheckingUpdate) return
+        scope.launch {
+            isCheckingUpdate = true
+            try {
+                updateCheckResult = updateChecker.checkForUpdates()
+            } finally {
+                isCheckingUpdate = false
+            }
+        }
+    }
+
+    fun openUpdateUrl(url: String) {
+        if (!openExternalUrl(context, url)) {
+            updateCheckResult = UpdateCheckResult.Error("无法打开浏览器，请稍后重试")
         }
     }
 
@@ -196,7 +220,10 @@ private fun AudioGuardScreen() {
     val timeFormat = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()) }
 
     if (showAbout) {
-        AboutDialog(onDismiss = { showAbout = false })
+        AboutDialog(
+            currentVersionName = currentVersionName,
+            onDismiss = { showAbout = false }
+        )
     }
 
     if (showFixLogDialog) {
@@ -211,6 +238,17 @@ private fun AudioGuardScreen() {
         PermissionGuideDialog(
             onDismiss = { showPermissionGuide = false },
             onAllPermissionsGranted = { showPermissionGuide = false }
+        )
+    }
+
+    updateCheckResult?.let { result ->
+        UpdateCheckDialog(
+            result = result,
+            onDismiss = { updateCheckResult = null },
+            onOpenUrl = { url ->
+                updateCheckResult = null
+                openUpdateUrl(url)
+            }
         )
     }
 
@@ -490,6 +528,14 @@ private fun AudioGuardScreen() {
                 Text("查看日志")
             }
 
+            OutlinedButton(
+                onClick = { launchUpdateCheck() },
+                enabled = !isCheckingUpdate,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
+            }
+
             // 快捷设置磁贴
             if (tileAdded) {
                 Text(
@@ -553,7 +599,10 @@ private fun enhancedStateToText(state: EnhancedState): String {
 }
 
 @Composable
-private fun AboutDialog(onDismiss: () -> Unit) {
+private fun AboutDialog(
+    currentVersionName: String,
+    onDismiss: () -> Unit,
+) {
     val context = LocalContext.current
 
     AlertDialog(
@@ -585,7 +634,8 @@ private fun AboutDialog(onDismiss: () -> Unit) {
                 Text("制作信息", style = MaterialTheme.typography.titleSmall)
                 Text(
                     "本软件由平行世界plwd与AI编程软件共同制作\n" +
-                    "测试设备：Redmi K80 至尊版"
+                    "测试设备：Redmi K80 至尊版\n" +
+                    "当前版本：$currentVersionName"
                 )
 
                 Text("开源协议", style = MaterialTheme.typography.titleSmall)
@@ -656,4 +706,130 @@ private fun FixLogDialog(
             TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
+}
+
+@Composable
+private fun UpdateCheckDialog(
+    result: UpdateCheckResult,
+    onDismiss: () -> Unit,
+    onOpenUrl: (String) -> Unit,
+) {
+    val context = LocalContext.current
+
+    when (result) {
+        is UpdateCheckResult.HasUpdate -> {
+            val updateInfo = result.updateInfo
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("发现新版本") },
+                text = {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("当前版本：${updateInfo.currentVersionName}")
+                        Text("最新版本：${updateInfo.latestVersionName}")
+                        Text("发布名称：${updateInfo.releaseName}")
+                        Text("安装包：${updateInfo.apkFileName}")
+                        Text("大小：${Formatter.formatFileSize(context, updateInfo.apkSizeBytes)}")
+
+                        HorizontalDivider()
+
+                        Text("更新说明", style = MaterialTheme.typography.titleSmall)
+                        Text(updateInfo.releaseNotes)
+
+                        OutlinedButton(
+                            onClick = { onOpenUrl(updateInfo.releaseUrl) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("查看发布页")
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { onOpenUrl(updateInfo.apkDownloadUrl) }) {
+                        Text("浏览器下载")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("稍后")
+                    }
+                }
+            )
+        }
+
+        is UpdateCheckResult.UpToDate -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("检查更新") },
+                text = {
+                    Text("当前已是最新版本：${result.currentVersionName}")
+                },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("关闭")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { onOpenUrl(result.releaseUrl) }) {
+                        Text("发布页")
+                    }
+                }
+            )
+        }
+
+        UpdateCheckResult.NoNetwork -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("检查更新") },
+                text = { Text("当前网络不可用，请连接网络后重试") },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("关闭")
+                    }
+                }
+            )
+        }
+
+        is UpdateCheckResult.Error -> {
+            AlertDialog(
+                onDismissRequest = onDismiss,
+                title = { Text("检查更新失败") },
+                text = { Text(result.message) },
+                confirmButton = {
+                    TextButton(onClick = onDismiss) {
+                        Text("关闭")
+                    }
+                }
+            )
+        }
+    }
+}
+
+private fun openExternalUrl(context: Context, url: String): Boolean {
+    return try {
+        val chooserIntent = Intent.createChooser(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
+            "选择浏览器"
+        ).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        context.startActivity(chooserIntent)
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun getInstalledVersionName(context: Context): String {
+    return try {
+        val packageInfo = context.packageManager.getPackageInfo(
+            context.packageName,
+            PackageManager.PackageInfoFlags.of(0)
+        )
+        packageInfo.versionName?.ifBlank { "未知版本" } ?: "未知版本"
+    } catch (_: Exception) {
+        "未知版本"
+    }
 }
