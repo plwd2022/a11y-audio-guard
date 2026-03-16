@@ -107,8 +107,8 @@ private fun AudioGuardScreen() {
     }
     var commDeviceName by remember { mutableStateOf("无") }
     var headsetName by remember { mutableStateOf("无") }
-    var heldBluetoothRouteMessage by remember { mutableStateOf<String?>(null) }
-    var canManualReleaseBluetoothRoute by remember { mutableStateOf(false) }
+    var heldRouteMessage by remember { mutableStateOf<String?>(null) }
+    var canManualReleaseHeldRoute by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
@@ -139,16 +139,16 @@ private fun AudioGuardScreen() {
             enhancedStateText = enhancedStateToText(monitor.getEnhancedState())
             commDeviceName = monitor.getCommunicationDevice()?.productName?.toString() ?: "无"
             headsetName = monitor.findConnectedHeadset()?.productName?.toString() ?: "未连接"
-            heldBluetoothRouteMessage = monitor.getHeldBluetoothRouteMessage()
-            canManualReleaseBluetoothRoute = monitor.canManuallyReleaseHeldBluetoothRoute()
+            heldRouteMessage = monitor.getHeldRouteMessage()
+            canManualReleaseHeldRoute = monitor.canManuallyReleaseHeldRoute()
         } else {
             status = GuardStatus.NO_HEADSET
             fixLog = emptyList()
             enhancedStateText = if (enhancedEnabled) "待启动" else "已关闭"
             commDeviceName = "无"
             headsetName = "未连接"
-            heldBluetoothRouteMessage = null
-            canManualReleaseBluetoothRoute = false
+            heldRouteMessage = null
+            canManualReleaseHeldRoute = false
         }
     }
 
@@ -443,7 +443,7 @@ private fun AudioGuardScreen() {
             Text("增强状态：$enhancedStateText", style = MaterialTheme.typography.bodyLarge)
             Text("输出设备：$headsetName", style = MaterialTheme.typography.bodyLarge)
             Text("通信设备：$commDeviceName", style = MaterialTheme.typography.bodyLarge)
-            heldBluetoothRouteMessage?.let { message ->
+            heldRouteMessage?.let { message ->
                 Text(
                     message,
                     style = MaterialTheme.typography.bodySmall,
@@ -451,10 +451,10 @@ private fun AudioGuardScreen() {
                 )
             }
 
-            if (canManualReleaseBluetoothRoute) {
+            if (canManualReleaseHeldRoute) {
                 OutlinedButton(
                     onClick = {
-                        AudioGuardService.requestReleaseHeldBluetoothRoute(context)
+                        AudioGuardService.requestReleaseHeldRoute(context)
                         scope.launch {
                             delay(700)
                             refreshState()
@@ -462,7 +462,7 @@ private fun AudioGuardScreen() {
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("尝试解除蓝牙接管")
+                    Text("尝试解除限制")
                 }
             }
 
