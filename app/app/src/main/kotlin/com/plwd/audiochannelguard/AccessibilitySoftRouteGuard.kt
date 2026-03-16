@@ -15,6 +15,11 @@ class AccessibilitySoftRouteGuard(
     private val onRoutedDeviceChanged: (AudioDeviceInfo?) -> Unit,
 ) {
 
+    enum class RoutingMode {
+        OBSERVE,
+        PINNED,
+    }
+
     companion object {
         private const val SAMPLE_RATE_HZ = 48_000
         private const val CHANNEL_MASK = AudioFormat.CHANNEL_OUT_MONO
@@ -31,6 +36,7 @@ class AccessibilitySoftRouteGuard(
 
     private var track: AudioTrack? = null
     private var targetDevice: AudioDeviceInfo? = null
+    private var routingMode = RoutingMode.OBSERVE
     private var writerThread: Thread? = null
 
     private val routingChangedListener = AudioRouting.OnRoutingChangedListener { routing ->
@@ -42,20 +48,25 @@ class AccessibilitySoftRouteGuard(
         }
     }
 
-    fun startOrUpdate(device: AudioDeviceInfo): Boolean {
+    fun startOrUpdate(
+        device: AudioDeviceInfo,
+        mode: RoutingMode,
+    ): Boolean {
         synchronized(lock) {
             val currentTrack = track
             if (running && currentTrack != null) {
                 targetDevice = device
-                currentTrack.setPreferredDevice(device)
+                routingMode = mode
+                applyRoutingMode(currentTrack, device, mode)
                 dispatchCurrentRoute(currentTrack)
                 return true
             }
 
             val createdTrack = createTrack() ?: return false
             targetDevice = device
+            routingMode = mode
             createdTrack.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
-            createdTrack.setPreferredDevice(device)
+            applyRoutingMode(createdTrack, device, mode)
             createdTrack.setVolume(KEEP_ALIVE_VOLUME)
             createdTrack.play()
 
@@ -78,6 +89,7 @@ class AccessibilitySoftRouteGuard(
             track = null
             writerThread = null
             targetDevice = null
+            routingMode = RoutingMode.OBSERVE
         }
 
         currentTrack?.removeOnRoutingChangedListener(routingChangedListener)
@@ -103,6 +115,8 @@ class AccessibilitySoftRouteGuard(
     fun getTargetDevice(): AudioDeviceInfo? = synchronized(lock) { targetDevice }
 
     fun getRoutedDevice(): AudioDeviceInfo? = synchronized(lock) { track?.routedDevice }
+
+    fun getRoutingMode(): RoutingMode = synchronized(lock) { routingMode }
 
     private fun createTrack(): AudioTrack? {
         return try {
@@ -156,6 +170,17 @@ class AccessibilitySoftRouteGuard(
         thread.isDaemon = true
         writerThread = thread
         thread.start()
+    }
+
+    private fun applyRoutingMode(
+        currentTrack: AudioTrack,
+        device: AudioDeviceInfo,
+        mode: RoutingMode,
+    ) {
+        when (mode) {
+            RoutingMode.OBSERVE -> currentTrack.setPreferredDevice(null)
+            RoutingMode.PINNED -> currentTrack.setPreferredDevice(device)
+        }
     }
 
     private fun dispatchCurrentRoute(currentTrack: AudioTrack) {

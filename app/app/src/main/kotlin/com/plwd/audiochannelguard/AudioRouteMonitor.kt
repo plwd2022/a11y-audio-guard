@@ -1616,8 +1616,11 @@ class AudioRouteMonitor(private val context: Context) {
 
         val targetHeadset = headset ?: return
         val previousTarget = classicBluetoothSoftGuard.getTargetDevice()
+        val previousMode = classicBluetoothSoftGuard.getRoutingMode()
         val wasRunning = classicBluetoothSoftGuard.isRunning()
-        if (!classicBluetoothSoftGuard.startOrUpdate(targetHeadset)) {
+        // In passive confirmation windows we only want to observe the actual accessibility route.
+        val requestedMode = AccessibilitySoftRouteGuard.RoutingMode.OBSERVE
+        if (!classicBluetoothSoftGuard.startOrUpdate(targetHeadset, requestedMode)) {
             stopClassicBluetoothSoftGuard("$reason，保真守护启动失败")
             addLog("经典蓝牙保真守护启动失败: ${targetHeadset.productName}")
             return
@@ -1626,10 +1629,11 @@ class AudioRouteMonitor(private val context: Context) {
         val retargeted =
             !wasRunning ||
                 previousTarget == null ||
-                !isSamePhysicalDevice(previousTarget, targetHeadset)
+                !isSamePhysicalDevice(previousTarget, targetHeadset) ||
+                previousMode != requestedMode
         if (retargeted) {
             classicBluetoothSoftGuardStartedAtElapsedMs = SystemClock.elapsedRealtime()
-            addLog("经典蓝牙保真守护已启动: ${targetHeadset.productName}")
+            addLog("经典蓝牙保真守护已启动(观察模式): ${targetHeadset.productName}")
         }
         if (pollingMode == PollingMode.IDLE) {
             handler.postDelayed(
