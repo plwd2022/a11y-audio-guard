@@ -51,12 +51,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.semantics.toggleableState
-import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -443,7 +437,6 @@ private fun AudioGuardScreen() {
         )
     }
 
-    val toggleDesc = "保护读屏声音。开启后，如果读屏声音误跑到扬声器，应用会自动把声音收回耳机。"
     val guardToggleAction: () -> Unit = {
         val enabled = !serviceRunning
         serviceRunning = enabled
@@ -459,12 +452,6 @@ private fun AudioGuardScreen() {
             refreshState()
         }
     }
-    val enhancedToggleDesc =
-        "增强保护（实验性）。开启后，软件会更主动地接管可能影响读屏播报的声音路径，尽量不让其他应用抢走。这样通常更稳，但可能影响外放、部分语音场景，并可能造成蓝牙音质持续处于窄带音质或者出现音质损失"
-    val classicBluetoothWidebandToggleDesc =
-        "经典蓝牙更清晰通话音质（实验性）。仅对经典蓝牙耳机生效。第三方应用不释放蓝牙占用时，为了持续保护读屏声音，系统可能退到通话音质。开启后会尽量让这段通话音质更清晰；解除持续保护后会恢复正常"
-    val classicBluetoothSoftGuardToggleDesc =
-        "经典蓝牙保真保护（实验性）。仅对经典蓝牙耳机生效。检测到疑似外放或尝试解除占用时，会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰"
     val statusText = guardStatusToText(status)
     val statusTitle = guardStatusTitle(serviceRunning, status)
     val statusSummary = guardStatusSummary(serviceRunning, status, headsetName)
@@ -501,7 +488,6 @@ private fun AudioGuardScreen() {
             ) {
                 StatusSummaryCard(
                     serviceRunning = serviceRunning,
-                    toggleDescription = toggleDesc,
                     statusTitle = statusTitle,
                     statusSummary = statusSummary,
                     statusText = statusText,
@@ -610,7 +596,6 @@ private fun AudioGuardScreen() {
                         checked = enhancedEnabled,
                         title = "增强保护（实验性）",
                         summary = "开启后会更主动地接管可能影响读屏播报的声音路径，尽量不让其他应用抢走。这样通常更稳，但可能影响外放、部分语音场景，并可能造成蓝牙音质持续处于窄带音质或者出现音质损失",
-                        contentDescription = enhancedToggleDesc,
                         onToggle = { enabled ->
                             enhancedEnabled = enabled
                             AudioGuardApp.setEnhancedModeEnabled(context, enabled)
@@ -628,7 +613,6 @@ private fun AudioGuardScreen() {
                         checked = classicBluetoothSoftGuardEnabled,
                         title = "经典蓝牙保真保护（实验性）",
                         summary = "仅对经典蓝牙耳机生效。会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
-                        contentDescription = classicBluetoothSoftGuardToggleDesc,
                         onToggle = { enabled ->
                             classicBluetoothSoftGuardEnabled = enabled
                             AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)
@@ -646,7 +630,6 @@ private fun AudioGuardScreen() {
                         checked = classicBluetoothWidebandEnabled,
                         title = "经典蓝牙更清晰通话音质（实验性）",
                         summary = "仅对经典蓝牙耳机生效。第三方应用不释放蓝牙占用时，为了持续保护读屏声音，系统可能退到通话音质。开启后会尽量让这段通话音质更清晰；解除持续保护后会恢复正常",
-                        contentDescription = classicBluetoothWidebandToggleDesc,
                         onToggle = { enabled ->
                             classicBluetoothWidebandEnabled = enabled
                             AudioGuardApp.setClassicBluetoothWidebandEnabled(context, enabled)
@@ -722,7 +705,6 @@ private fun AudioGuardScreen() {
 @Composable
 private fun StatusSummaryCard(
     serviceRunning: Boolean,
-    toggleDescription: String,
     statusTitle: String,
     statusSummary: String,
     statusText: String,
@@ -742,12 +724,6 @@ private fun StatusSummaryCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = toggleDescription
-                        role = Role.Switch
-                        toggleableState = ToggleableState(serviceRunning)
-                        stateDescription = if (serviceRunning) "已开启" else "已关闭"
-                    }
                     .toggleable(
                         value = serviceRunning,
                         role = Role.Switch,
@@ -839,18 +815,11 @@ private fun SettingsToggleRow(
     checked: Boolean,
     title: String,
     summary: String,
-    contentDescription: String,
     onToggle: (Boolean) -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) {
-                this.contentDescription = contentDescription
-                role = Role.Switch
-                toggleableState = ToggleableState(checked)
-                stateDescription = if (checked) "已开启" else "已关闭"
-            }
             .toggleable(
                 value = checked,
                 role = Role.Switch,
