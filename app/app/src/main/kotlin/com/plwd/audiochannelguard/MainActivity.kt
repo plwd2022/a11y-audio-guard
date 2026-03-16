@@ -28,6 +28,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -38,6 +39,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -112,7 +114,10 @@ private fun AudioGuardScreen() {
     var heldRouteMessage by remember { mutableStateOf<String?>(null) }
     var canManualReleaseHeldRoute by remember { mutableStateOf(false) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
+    var isStartingBuiltinDownload by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
+    var updateActionMessage by remember { mutableStateOf<String?>(null) }
+    var showInstallPermissionDialog by remember { mutableStateOf(false) }
     var showAbout by remember { mutableStateOf(false) }
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
@@ -122,6 +127,8 @@ private fun AudioGuardScreen() {
     val contentScrollState = rememberScrollState()
     val currentVersionName = remember(context) { getInstalledVersionName(context) }
     val updateChecker = remember(context) { UpdateChecker(context.applicationContext) }
+    val updateManager = remember(context) { AppUpdateManager.getInstance(context.applicationContext) }
+    val updateDownloadState by updateManager.downloadState.collectAsState()
 
     // 检查是否需要显示权限引导
     LaunchedEffect(Unit) {
@@ -173,6 +180,61 @@ private fun AudioGuardScreen() {
     fun openUpdateUrl(url: String) {
         if (!openExternalUrl(context, url)) {
             updateCheckResult = UpdateCheckResult.Error("无法打开浏览器，请稍后重试")
+        }
+    }
+
+    fun startBuiltInDownload(updateInfo: UpdateInfo) {
+        if (isStartingBuiltinDownload) return
+        scope.launch {
+            isStartingBuiltinDownload = true
+            try {
+                updateManager.startDownload(updateInfo)
+                updateCheckResult = null
+            } catch (exception: Exception) {
+                updateActionMessage = "启动下载失败: ${exception.message}"
+            } finally {
+                isStartingBuiltinDownload = false
+            }
+        }
+    }
+
+    fun retryBuiltInDownload() {
+        if (isStartingBuiltinDownload) return
+        scope.launch {
+            isStartingBuiltinDownload = true
+            try {
+                if (!updateManager.retryDownload()) {
+                    updateActionMessage = "当前没有可重试的下载任务"
+                }
+            } catch (exception: Exception) {
+                updateActionMessage = "重试下载失败: ${exception.message}"
+            } finally {
+                isStartingBuiltinDownload = false
+            }
+        }
+    }
+
+    fun cancelBuiltInDownload() {
+        scope.launch {
+            updateManager.cancelDownload()
+        }
+    }
+
+    fun installBuiltInDownloadedPackage() {
+        scope.launch {
+            when (val result = updateManager.installDownloadedApk()) {
+                UpdateInstallResult.Started -> {
+                    updateActionMessage = "已打开系统安装界面。安装成功后，旧安装包会自动清理。"
+                }
+
+                UpdateInstallResult.PermissionRequired -> {
+                    showInstallPermissionDialog = true
+                }
+
+                is UpdateInstallResult.Error -> {
+                    updateActionMessage = result.message
+                }
+            }
         }
     }
 
@@ -241,13 +303,55 @@ private fun AudioGuardScreen() {
         )
     }
 
+    if (showInstallPermissionDialog) {
+        AlertDialog(
+            onDismissRequest = { showInstallPermissionDialog = false },
+            title = { Text("需要安装权限") },
+            text = {
+                Text("请先允许本应用安装未知来源应用，授权后再回到这里点击“立即安装”。")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showInstallPermissionDialog = false
+                        context.startActivity(updateManager.createInstallPermissionSettingsIntent())
+                    }
+                ) {
+                    Text("去设置")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showInstallPermissionDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    updateActionMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { updateActionMessage = null },
+            title = { Text("更新提示") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { updateActionMessage = null }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
     updateCheckResult?.let { result ->
         UpdateCheckDialog(
             result = result,
+            isStartingBuiltinDownload = isStartingBuiltinDownload,
             onDismiss = { updateCheckResult = null },
             onOpenUrl = { url ->
                 updateCheckResult = null
                 openUpdateUrl(url)
+            },
+            onStartBuiltInDownload = { updateInfo ->
+                startBuiltInDownload(updateInfo)
             }
         )
     }
@@ -536,6 +640,16 @@ private fun AudioGuardScreen() {
                 Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
             }
 
+            UpdateDownloadSection(
+                state = updateDownloadState,
+                isStartingDownload = isStartingBuiltinDownload,
+                onRetry = { retryBuiltInDownload() },
+                onCancelOrClear = { cancelBuiltInDownload() },
+                onInstall = { installBuiltInDownloadedPackage() },
+                onOpenReleasePage = { url -> openUpdateUrl(url) },
+                context = context
+            )
+
             // 快捷设置磁贴
             if (tileAdded) {
                 Text(
@@ -711,8 +825,10 @@ private fun FixLogDialog(
 @Composable
 private fun UpdateCheckDialog(
     result: UpdateCheckResult,
+    isStartingBuiltinDownload: Boolean,
     onDismiss: () -> Unit,
     onOpenUrl: (String) -> Unit,
+    onStartBuiltInDownload: (UpdateInfo) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -747,33 +863,53 @@ private fun UpdateCheckDialog(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { onOpenUrl(updateInfo.apkDownloadUrl) }) {
-                        Text("浏览器下载")
+                    TextButton(
+                        onClick = { onStartBuiltInDownload(updateInfo) },
+                        enabled = !isStartingBuiltinDownload
+                    ) {
+                        Text(if (isStartingBuiltinDownload) "准备中..." else "内置下载")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = onDismiss) {
-                        Text("稍后")
+                    TextButton(onClick = { onOpenUrl(updateInfo.apkDownloadUrl) }) {
+                        Text("浏览器下载")
                     }
                 }
             )
         }
 
         is UpdateCheckResult.UpToDate -> {
+            val updateInfo = result.updateInfo
             AlertDialog(
                 onDismissRequest = onDismiss,
-                title = { Text("检查更新") },
+                title = { Text("已是最新版本") },
                 text = {
-                    Text("当前已是最新版本：${result.currentVersionName}")
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Text("当前已是最新版本：${updateInfo.currentVersionName}")
+                        Text("如需覆盖安装，可继续下载当前版本安装包。")
+
+                        OutlinedButton(
+                            onClick = { onOpenUrl(updateInfo.releaseUrl) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("查看发布页")
+                        }
+                    }
                 },
                 confirmButton = {
-                    TextButton(onClick = onDismiss) {
-                        Text("关闭")
+                    TextButton(
+                        onClick = { onStartBuiltInDownload(updateInfo) },
+                        enabled = !isStartingBuiltinDownload
+                    ) {
+                        Text(if (isStartingBuiltinDownload) "准备中..." else "内置下载")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { onOpenUrl(result.releaseUrl) }) {
-                        Text("发布页")
+                    TextButton(onClick = { onOpenUrl(updateInfo.apkDownloadUrl) }) {
+                        Text("浏览器下载")
                     }
                 }
             )
@@ -807,6 +943,146 @@ private fun UpdateCheckDialog(
     }
 }
 
+@Composable
+private fun UpdateDownloadSection(
+    state: UpdateDownloadState,
+    isStartingDownload: Boolean,
+    onRetry: () -> Unit,
+    onCancelOrClear: () -> Unit,
+    onInstall: () -> Unit,
+    onOpenReleasePage: (String) -> Unit,
+    context: Context,
+) {
+    if (state is UpdateDownloadState.Idle) return
+
+    HorizontalDivider()
+
+    when (state) {
+        is UpdateDownloadState.Pending -> {
+            Text("更新下载：准备中", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "正在准备下载 ${state.updateInfo.latestVersionName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(
+                onClick = onCancelOrClear,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("取消下载")
+            }
+        }
+
+        is UpdateDownloadState.Downloading -> {
+            val percent = (state.progress * 100).toInt().coerceIn(0, 100)
+            Text("更新下载中", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "版本：${state.updateInfo.latestVersionName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LinearProgressIndicator(
+                progress = { state.progress.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                "${formatSize(context, state.downloadedBytes)} / ${formatSizeOrUnknown(context, state.totalBytes)}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "进度：$percent%  速度：${formatSpeed(context, state.speedBytes)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(
+                onClick = onCancelOrClear,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("取消下载")
+            }
+        }
+
+        is UpdateDownloadState.Completed -> {
+            Text("更新包已下载", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "版本：${state.updateInfo.latestVersionName}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                "安装包：${state.updateInfo.apkFileName}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "大小：${Formatter.formatFileSize(context, state.updateInfo.apkSizeBytes)}",
+                style = MaterialTheme.typography.bodySmall
+            )
+            Text(
+                "安装成功后会自动清理旧安装包。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(
+                onClick = onInstall,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("立即安装")
+            }
+            OutlinedButton(
+                onClick = { onOpenReleasePage(state.updateInfo.releaseUrl) },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("查看发布页")
+            }
+            OutlinedButton(
+                onClick = onCancelOrClear,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("删除安装包")
+            }
+        }
+
+        is UpdateDownloadState.Failed -> {
+            Text("更新下载失败", style = MaterialTheme.typography.titleMedium)
+            state.updateInfo?.let { updateInfo ->
+                Text(
+                    "版本：${updateInfo.latestVersionName}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Text(
+                state.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(
+                onClick = onRetry,
+                enabled = !isStartingDownload,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(if (isStartingDownload) "准备中..." else "重试下载")
+            }
+            state.updateInfo?.let { updateInfo ->
+                OutlinedButton(
+                    onClick = { onOpenReleasePage(updateInfo.apkDownloadUrl) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("浏览器下载")
+                }
+            }
+            OutlinedButton(
+                onClick = onCancelOrClear,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("清除记录")
+            }
+        }
+
+        UpdateDownloadState.Idle -> Unit
+    }
+}
+
 private fun openExternalUrl(context: Context, url: String): Boolean {
     return try {
         val chooserIntent = Intent.createChooser(
@@ -826,10 +1102,30 @@ private fun getInstalledVersionName(context: Context): String {
     return try {
         val packageInfo = context.packageManager.getPackageInfo(
             context.packageName,
-            PackageManager.PackageInfoFlags.of(0)
+            0
         )
         packageInfo.versionName?.ifBlank { "未知版本" } ?: "未知版本"
     } catch (_: Exception) {
         "未知版本"
+    }
+}
+
+private fun formatSize(context: Context, bytes: Long): String {
+    return Formatter.formatFileSize(context, bytes.coerceAtLeast(0L))
+}
+
+private fun formatSizeOrUnknown(context: Context, bytes: Long): String {
+    return if (bytes > 0L) {
+        Formatter.formatFileSize(context, bytes)
+    } else {
+        "未知大小"
+    }
+}
+
+private fun formatSpeed(context: Context, bytesPerSecond: Long): String {
+    return if (bytesPerSecond > 0L) {
+        "${Formatter.formatFileSize(context, bytesPerSecond)}/s"
+    } else {
+        "计算中"
     }
 }

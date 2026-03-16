@@ -36,6 +36,8 @@ class AudioGuardApp : Application() {
         var isTampered = false
             private set
 
+        fun getExpectedCertHash(): String = EXPECTED_CERT_HASH
+
         fun isGuardEnabled(context: Context): Boolean {
             return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .getBoolean(KEY_ENABLED, false)
@@ -110,6 +112,7 @@ class AudioGuardApp : Application() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        AppUpdateManager.getInstance(this).handleAppLaunchCleanup()
         if (!verifySignature()) {
             isTampered = true
             Toast.makeText(this, "签名校验失败，应用可能被篡改", Toast.LENGTH_LONG).show()

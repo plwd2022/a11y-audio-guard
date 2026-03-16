@@ -18,16 +18,14 @@ data class UpdateInfo(
     val releaseNotes: String,
     val releaseUrl: String,
     val apkDownloadUrl: String,
+    val downloadUrls: List<String>,
     val apkFileName: String,
     val apkSizeBytes: Long,
 )
 
 sealed interface UpdateCheckResult {
     data class HasUpdate(val updateInfo: UpdateInfo) : UpdateCheckResult
-    data class UpToDate(
-        val currentVersionName: String,
-        val releaseUrl: String,
-    ) : UpdateCheckResult
+    data class UpToDate(val updateInfo: UpdateInfo) : UpdateCheckResult
 
     object NoNetwork : UpdateCheckResult
     data class Error(val message: String) : UpdateCheckResult
@@ -58,26 +56,24 @@ class UpdateChecker(private val context: Context) {
             it.name.endsWith(".apk", ignoreCase = true) && it.downloadUrl.isNotBlank()
         }
             ?: return@withContext UpdateCheckResult.Error("最新版本未附带 APK 文件")
+        val downloadUrls = buildDownloadUrls(apkAsset.downloadUrl)
+        val updateInfo = UpdateInfo(
+            currentVersionName = currentVersionName,
+            latestVersionName = latestVersionName,
+            releaseName = release.name.ifBlank { latestVersionName },
+            releaseNotes = release.body.ifBlank { "暂无更新说明" },
+            releaseUrl = release.htmlUrl,
+            apkDownloadUrl = apkAsset.downloadUrl,
+            downloadUrls = downloadUrls,
+            apkFileName = apkAsset.name,
+            apkSizeBytes = apkAsset.sizeBytes
+        )
 
         if (!isNewerVersion(release.tagName, currentVersionName)) {
-            return@withContext UpdateCheckResult.UpToDate(
-                currentVersionName = currentVersionName,
-                releaseUrl = release.htmlUrl
-            )
+            return@withContext UpdateCheckResult.UpToDate(updateInfo)
         }
 
-        return@withContext UpdateCheckResult.HasUpdate(
-            updateInfo = UpdateInfo(
-                currentVersionName = currentVersionName,
-                latestVersionName = latestVersionName,
-                releaseName = release.name.ifBlank { latestVersionName },
-                releaseNotes = release.body.ifBlank { "暂无更新说明" },
-                releaseUrl = release.htmlUrl,
-                apkDownloadUrl = apkAsset.downloadUrl,
-                apkFileName = apkAsset.name,
-                apkSizeBytes = apkAsset.sizeBytes
-            )
-        )
+        return@withContext UpdateCheckResult.HasUpdate(updateInfo)
     }
 
     private fun fetchLatestRelease(): GitHubRelease {
@@ -167,11 +163,27 @@ class UpdateChecker(private val context: Context) {
         return currentIsPreRelease && !latestIsPreRelease
     }
 
+    private fun buildDownloadUrls(originalUrl: String): List<String> {
+        val proxyServers = listOf(
+            "https://ghproxy.net/",
+            "https://gitdl.cn/",
+            "https://gh.ddlc.top/",
+            "https://hub.fastgit.xyz/",
+            "https://download.fastgit.org/"
+        )
+        return buildList {
+            proxyServers.forEach { proxy ->
+                add(proxy + originalUrl)
+            }
+            add(originalUrl)
+        }.distinct()
+    }
+
     private fun getCurrentVersionName(): String {
         return try {
             val packageInfo = context.packageManager.getPackageInfo(
                 context.packageName,
-                PackageManager.PackageInfoFlags.of(0)
+                0
             )
             packageInfo.versionName?.ifBlank { "未知版本" } ?: "未知版本"
         } catch (_: Exception) {
