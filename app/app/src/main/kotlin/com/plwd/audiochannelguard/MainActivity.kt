@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.format.Formatter
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -61,6 +62,9 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+private const val TAG = "MainActivity"
+private const val AUTO_UPDATE_TRIGGER_DEBOUNCE_MS = 10_000L
 
 class MainActivity : ComponentActivity() {
 
@@ -120,7 +124,7 @@ private fun AudioGuardScreen() {
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
     var showFixLogDialog by remember { mutableStateOf(false) }
-    var hasScheduledAutoCheck by remember { mutableStateOf(false) }
+    var lastAutoCheckTriggerAt by remember { mutableStateOf(0L) }
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     val activity = context as? ComponentActivity
     val contentScrollState = rememberScrollState()
@@ -186,6 +190,11 @@ private fun AudioGuardScreen() {
             !showFixLogDialog
     }
 
+    fun isAutoUpdateCheckBlockedByDownloadState(): Boolean {
+        return updateDownloadState is UpdateDownloadState.Pending ||
+            updateDownloadState is UpdateDownloadState.Downloading
+    }
+
     fun showAutoUpdateDialogIfPossible(updateInfo: UpdateInfo) {
         if (!updateChecker.shouldPromptAutoUpdate(updateInfo.latestVersionName)) {
             pendingAutoUpdateInfo = null
@@ -209,28 +218,65 @@ private fun AudioGuardScreen() {
         updateCheckResult = UpdateCheckResult.HasUpdate(updateInfo)
     }
 
-    fun launchUpdateCheck(isAutomatic: Boolean = false) {
+    fun handleAutomaticUpdateCheckResult(result: UpdateCheckResult, reason: String) {
+        when (result) {
+            is UpdateCheckResult.HasUpdate -> {
+                Log.i(TAG, "自动检查更新发现新版本($reason): ${result.updateInfo.latestVersionName}")
+                updateChecker.recordAutoCheckSuccess()
+                showAutoUpdateDialogIfPossible(result.updateInfo)
+            }
+
+            is UpdateCheckResult.UpToDate -> {
+                Log.i(TAG, "自动检查更新完成($reason): 当前已是最新版本 ${result.updateInfo.latestVersionName}")
+                updateChecker.recordAutoCheckSuccess()
+            }
+
+            UpdateCheckResult.NoNetwork -> {
+                Log.i(TAG, "自动检查更新跳过($reason): 当前网络未就绪")
+            }
+
+            is UpdateCheckResult.Error -> {
+                Log.w(TAG, "自动检查更新失败($reason): ${result.message}")
+                updateChecker.recordAutoCheckFailure()
+            }
+        }
+    }
+
+    fun launchUpdateCheck(isAutomatic: Boolean = false, reason: String = "手动触发") {
         if (isCheckingUpdate) return
         scope.launch {
-            if (isAutomatic && !updateChecker.shouldAutoCheckNow()) {
-                return@launch
+            if (isAutomatic) {
+                if (isAutoUpdateCheckBlockedByDownloadState()) {
+                    return@launch
+                }
+                if (!updateChecker.shouldAutoCheckNow()) {
+                    return@launch
+                }
             }
             isCheckingUpdate = true
             try {
                 val result = updateChecker.checkForUpdates()
                 if (isAutomatic) {
-                    if (result !is UpdateCheckResult.NoNetwork) {
-                        updateChecker.recordAutoCheckAttempt()
-                    }
-                    if (result is UpdateCheckResult.HasUpdate) {
-                        showAutoUpdateDialogIfPossible(result.updateInfo)
-                    }
+                    handleAutomaticUpdateCheckResult(result, reason)
                 } else {
                     updateCheckResult = result
                 }
             } finally {
                 isCheckingUpdate = false
             }
+        }
+    }
+
+    fun requestAutomaticUpdateCheck(reason: String, delayMillis: Long = 0L) {
+        if (isCheckingUpdate || isAutoUpdateCheckBlockedByDownloadState()) return
+        val now = System.currentTimeMillis()
+        if (now - lastAutoCheckTriggerAt < AUTO_UPDATE_TRIGGER_DEBOUNCE_MS) return
+        lastAutoCheckTriggerAt = now
+        scope.launch {
+            if (delayMillis > 0L) {
+                delay(delayMillis)
+            }
+            launchUpdateCheck(isAutomatic = true, reason = reason)
         }
     }
 
@@ -295,13 +341,8 @@ private fun AudioGuardScreen() {
         }
     }
 
-    LaunchedEffect(updateDownloadState) {
-        if (hasScheduledAutoCheck) return@LaunchedEffect
-        if (updateDownloadState !is UpdateDownloadState.Idle) return@LaunchedEffect
-
-        hasScheduledAutoCheck = true
-        delay(1500L)
-        launchUpdateCheck(isAutomatic = true)
+    LaunchedEffect(Unit) {
+        requestAutomaticUpdateCheck(reason = "页面首次显示", delayMillis = 1500L)
     }
 
     LaunchedEffect(
@@ -330,6 +371,7 @@ private fun AudioGuardScreen() {
                     tileAdded = AudioGuardApp.isTileAdded(context)
                     probeExistingTileIfNeeded()
                     refreshState()
+                    requestAutomaticUpdateCheck(reason = "页面恢复")
                 }
             }
             activity.lifecycle.addObserver(observer)

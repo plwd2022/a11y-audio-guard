@@ -39,8 +39,10 @@ class UpdateChecker(private val context: Context) {
         private const val REQUEST_TIMEOUT_MS = 15000
         private const val AUTO_CHECK_PREFS = "update_check_prefs"
         private const val KEY_LAST_AUTO_CHECK_AT = "last_auto_check_at"
+        private const val KEY_LAST_AUTO_CHECK_FAILURE_AT = "last_auto_check_failure_at"
         private const val KEY_LAST_AUTO_PROMPTED_VERSION = "last_auto_prompted_version"
         private const val AUTO_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
+        private const val AUTO_CHECK_FAILURE_RETRY_MS = 2L * 60L * 1000L
     }
 
     private val prefs = context.getSharedPreferences(AUTO_CHECK_PREFS, Context.MODE_PRIVATE)
@@ -84,11 +86,23 @@ class UpdateChecker(private val context: Context) {
 
     fun shouldAutoCheckNow(now: Long = System.currentTimeMillis()): Boolean {
         val lastCheckAt = prefs.getLong(KEY_LAST_AUTO_CHECK_AT, 0L)
-        return lastCheckAt <= 0L || now - lastCheckAt >= AUTO_CHECK_INTERVAL_MS
+        if (lastCheckAt > 0L && now - lastCheckAt < AUTO_CHECK_INTERVAL_MS) {
+            return false
+        }
+
+        val lastFailureAt = prefs.getLong(KEY_LAST_AUTO_CHECK_FAILURE_AT, 0L)
+        return lastFailureAt <= 0L || now - lastFailureAt >= AUTO_CHECK_FAILURE_RETRY_MS
     }
 
-    fun recordAutoCheckAttempt(now: Long = System.currentTimeMillis()) {
-        prefs.edit().putLong(KEY_LAST_AUTO_CHECK_AT, now).apply()
+    fun recordAutoCheckSuccess(now: Long = System.currentTimeMillis()) {
+        prefs.edit()
+            .putLong(KEY_LAST_AUTO_CHECK_AT, now)
+            .remove(KEY_LAST_AUTO_CHECK_FAILURE_AT)
+            .apply()
+    }
+
+    fun recordAutoCheckFailure(now: Long = System.currentTimeMillis()) {
+        prefs.edit().putLong(KEY_LAST_AUTO_CHECK_FAILURE_AT, now).apply()
     }
 
     fun shouldPromptAutoUpdate(versionName: String): Boolean {
@@ -103,7 +117,19 @@ class UpdateChecker(private val context: Context) {
     }
 
     private fun fetchLatestRelease(): GitHubRelease {
-        val url = URL("https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest")
+        var lastException: Exception? = null
+        for (candidateUrl in buildReleaseApiUrls()) {
+            try {
+                return fetchLatestRelease(candidateUrl)
+            } catch (exception: Exception) {
+                lastException = exception
+            }
+        }
+        throw lastException ?: IOException("无法获取最新发布信息")
+    }
+
+    private fun fetchLatestRelease(urlString: String): GitHubRelease {
+        val url = URL(urlString)
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = REQUEST_TIMEOUT_MS
@@ -162,8 +188,7 @@ class UpdateChecker(private val context: Context) {
             context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork ?: return false
         val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
-            capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun normalizeVersionName(versionName: String): String {
@@ -202,6 +227,14 @@ class UpdateChecker(private val context: Context) {
                 add(proxy + originalUrl)
             }
             add(originalUrl)
+        }.distinct()
+    }
+
+    private fun buildReleaseApiUrls(): List<String> {
+        val originalUrl = "https://api.github.com/repos/$REPO_OWNER/$REPO_NAME/releases/latest"
+        return buildList {
+            add(originalUrl)
+            addAll(buildDownloadUrls(originalUrl))
         }.distinct()
     }
 
