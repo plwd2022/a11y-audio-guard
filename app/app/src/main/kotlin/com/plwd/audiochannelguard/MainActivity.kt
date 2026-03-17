@@ -48,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -134,6 +135,8 @@ private fun AudioGuardScreen() {
     var showFixLogDialog by remember { mutableStateOf(false) }
     var lastAutoCheckTriggerAt by remember { mutableStateOf(0L) }
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
+    var hasObservedDownloadState by rememberSaveable { mutableStateOf(false) }
+    var autoInstallHandledFilePath by rememberSaveable { mutableStateOf<String?>(null) }
     val activity = context as? ComponentActivity
     val contentScrollState = rememberScrollState()
     val currentVersionName = remember(context) { getInstalledVersionName(context) }
@@ -373,6 +376,27 @@ private fun AudioGuardScreen() {
         showAutoUpdateDialogIfPossible(pendingUpdateInfo)
     }
 
+    LaunchedEffect(updateDownloadState) {
+        val completedState = updateDownloadState as? UpdateDownloadState.Completed
+        if (!hasObservedDownloadState) {
+            hasObservedDownloadState = true
+            autoInstallHandledFilePath = completedState?.filePath
+            return@LaunchedEffect
+        }
+
+        if (completedState == null) {
+            autoInstallHandledFilePath = null
+            return@LaunchedEffect
+        }
+
+        if (autoInstallHandledFilePath == completedState.filePath) {
+            return@LaunchedEffect
+        }
+
+        autoInstallHandledFilePath = completedState.filePath
+        installBuiltInDownloadedPackage()
+    }
+
     DisposableEffect(activity) {
         if (activity == null) {
             onDispose { }
@@ -565,6 +589,16 @@ private fun AudioGuardScreen() {
                     }
                 )
 
+                UpdateDownloadCard(
+                    state = updateDownloadState,
+                    isStartingDownload = isStartingBuiltinDownload,
+                    onRetry = { retryBuiltInDownload() },
+                    onCancelOrClear = { cancelBuiltInDownload() },
+                    onInstall = { installBuiltInDownloadedPackage() },
+                    onOpenReleasePage = { url -> openUpdateUrl(url) },
+                    context = context
+                )
+
                 if (showTilePrompt) {
                     SectionSurface(
                         title = "控制中心磁贴"
@@ -634,8 +668,7 @@ private fun AudioGuardScreen() {
 
                     if (canManualReleaseHeldRoute) {
                         SectionSurface(
-                            title = "进一步处理",
-                            subtitle = "仅在自动恢复不理想时再尝试"
+                            title = "进一步处理"
                         ) {
                             heldRouteMessage?.let { message ->
                                 MergedTextBlock {
@@ -777,30 +810,22 @@ private fun AudioGuardScreen() {
                         Text("查看保护记录")
                     }
 
-                    OutlinedButton(
-                        onClick = { launchUpdateCheck() },
-                        enabled = !isCheckingUpdate,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
+                    if (updateDownloadState is UpdateDownloadState.Idle) {
+                        OutlinedButton(
+                            onClick = { launchUpdateCheck() },
+                            enabled = !isCheckingUpdate,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(if (isCheckingUpdate) "检查更新中..." else "检查更新")
+                        }
+                        MergedTextBlock {
+                            Text(
+                                "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
-                    MergedTextBlock {
-                        Text(
-                            "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    UpdateDownloadSection(
-                        state = updateDownloadState,
-                        isStartingDownload = isStartingBuiltinDownload,
-                        onRetry = { retryBuiltInDownload() },
-                        onCancelOrClear = { cancelBuiltInDownload() },
-                        onInstall = { installBuiltInDownloadedPackage() },
-                        onOpenReleasePage = { url -> openUpdateUrl(url) },
-                        context = context
-                    )
 
                     OutlinedButton(
                         onClick = { showPermissionGuide = true },
@@ -1280,7 +1305,7 @@ private fun UpdateCheckDialog(
 }
 
 @Composable
-private fun UpdateDownloadSection(
+private fun UpdateDownloadCard(
     state: UpdateDownloadState,
     isStartingDownload: Boolean,
     onRetry: () -> Unit,
@@ -1291,139 +1316,185 @@ private fun UpdateDownloadSection(
 ) {
     if (state is UpdateDownloadState.Idle) return
 
-    HorizontalDivider()
+    val (title, subtitle, containerColor) = when (state) {
+        is UpdateDownloadState.Pending -> Triple(
+            "下载与安装",
+            "正在准备内置下载",
+            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        )
 
-    when (state) {
-        is UpdateDownloadState.Pending -> {
-            MergedTextBlock(verticalSpacing = 6.dp) {
-                Text("更新下载：准备中", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "正在准备下载 ${state.updateInfo.latestVersionName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            OutlinedButton(
-                onClick = onCancelOrClear,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("取消下载")
-            }
-        }
+        is UpdateDownloadState.Downloading -> Triple(
+            "下载与安装",
+            "更新包正在下载，进度会实时刷新",
+            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+        )
 
-        is UpdateDownloadState.Downloading -> {
-            val percent = (state.progress * 100).toInt().coerceIn(0, 100)
-            MergedTextBlock(verticalSpacing = 6.dp) {
-                Text("更新下载中", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "版本：${state.updateInfo.latestVersionName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    "${formatSize(context, state.downloadedBytes)} / ${formatSizeOrUnknown(context, state.totalBytes)}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    "进度：$percent%  速度：${formatSpeed(context, state.speedBytes)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            LinearProgressIndicator(
-                progress = { state.progress.coerceIn(0f, 1f) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            OutlinedButton(
-                onClick = onCancelOrClear,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("取消下载")
-            }
-        }
+        is UpdateDownloadState.Completed -> Triple(
+            "下载与安装",
+            "安装包已经准备好，可以直接安装",
+            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+        )
 
-        is UpdateDownloadState.Completed -> {
-            MergedTextBlock(verticalSpacing = 6.dp) {
-                Text("更新包已下载", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "版本：${state.updateInfo.latestVersionName}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    "安装包：${state.updateInfo.apkFileName}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    "大小：${Formatter.formatFileSize(context, state.updateInfo.apkSizeBytes)}",
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Text(
-                    "安装成功后会自动清理旧安装包。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Button(
-                onClick = onInstall,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("立即安装")
-            }
-            OutlinedButton(
-                onClick = { onOpenReleasePage(state.updateInfo.releaseUrl) },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("查看发布页")
-            }
-            OutlinedButton(
-                onClick = onCancelOrClear,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("删除安装包")
-            }
-        }
+        is UpdateDownloadState.Failed -> Triple(
+            "下载与安装",
+            "内置下载失败，可直接重试或改用浏览器下载",
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+        )
 
-        is UpdateDownloadState.Failed -> {
-            MergedTextBlock(verticalSpacing = 6.dp) {
-                Text("更新下载失败", style = MaterialTheme.typography.titleMedium)
-                state.updateInfo?.let { updateInfo ->
-                    Text(
-                        "版本：${updateInfo.latestVersionName}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+        UpdateDownloadState.Idle -> return
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = containerColor
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            MergedTextBlock(verticalSpacing = 2.dp) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            HorizontalDivider()
+
+            when (state) {
+                is UpdateDownloadState.Pending -> {
+                    MergedTextBlock(verticalSpacing = 6.dp) {
+                        Text("准备下载 ${state.updateInfo.latestVersionName}", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "内置下载任务已经创建，通常会很快开始。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onCancelOrClear,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("取消下载")
+                    }
+                }
+
+                is UpdateDownloadState.Downloading -> {
+                    val percent = (state.progress * 100).toInt().coerceIn(0, 100)
+                    MergedTextBlock(verticalSpacing = 6.dp) {
+                        Text(
+                            "正在下载 ${state.updateInfo.latestVersionName}",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            "${formatSize(context, state.downloadedBytes)} / ${formatSizeOrUnknown(context, state.totalBytes)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "进度：$percent%  速度：${formatSpeed(context, state.speedBytes)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { state.progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedButton(
+                        onClick = onCancelOrClear,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("取消下载")
+                    }
                 }
-                Text(
-                    state.message,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            Button(
-                onClick = onRetry,
-                enabled = !isStartingDownload,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(if (isStartingDownload) "准备中..." else "重试下载")
-            }
-            state.updateInfo?.let { updateInfo ->
-                OutlinedButton(
-                    onClick = { onOpenReleasePage(updateInfo.apkDownloadUrl) },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("浏览器下载")
+
+                is UpdateDownloadState.Completed -> {
+                    MergedTextBlock(verticalSpacing = 6.dp) {
+                        Text("更新包已下载", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "版本：${state.updateInfo.latestVersionName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "安装包：${state.updateInfo.apkFileName}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "大小：${Formatter.formatFileSize(context, state.updateInfo.apkSizeBytes)}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "安装成功后会自动清理旧安装包。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = onInstall,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("立即安装")
+                    }
+                    OutlinedButton(
+                        onClick = { onOpenReleasePage(state.updateInfo.releaseUrl) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("查看发布页")
+                    }
+                    OutlinedButton(
+                        onClick = onCancelOrClear,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("删除安装包")
+                    }
                 }
-            }
-            OutlinedButton(
-                onClick = onCancelOrClear,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("清除记录")
+
+                is UpdateDownloadState.Failed -> {
+                    MergedTextBlock(verticalSpacing = 6.dp) {
+                        Text("更新下载失败", style = MaterialTheme.typography.titleMedium)
+                        state.updateInfo?.let { updateInfo ->
+                            Text(
+                                "版本：${updateInfo.latestVersionName}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Text(
+                            state.message,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Button(
+                        onClick = onRetry,
+                        enabled = !isStartingDownload,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(if (isStartingDownload) "准备中..." else "重试下载")
+                    }
+                    state.updateInfo?.let { updateInfo ->
+                        OutlinedButton(
+                            onClick = { onOpenReleasePage(updateInfo.apkDownloadUrl) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("浏览器下载")
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onCancelOrClear,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("清除记录")
+                    }
+                }
+
+                UpdateDownloadState.Idle -> Unit
             }
         }
-
-        UpdateDownloadState.Idle -> Unit
     }
 }
 
