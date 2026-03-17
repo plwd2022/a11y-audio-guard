@@ -10,6 +10,7 @@ import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.text.format.Formatter
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -114,6 +115,13 @@ private fun AudioGuardScreen() {
     var headsetName by remember { mutableStateOf("无") }
     var heldRouteMessage by remember { mutableStateOf<String?>(null) }
     var canManualReleaseHeldRoute by remember { mutableStateOf(false) }
+    var notificationsEnabled by remember { mutableStateOf(AudioGuardService.areNotificationsEnabled(context)) }
+    var persistentChannelBlocked by remember {
+        mutableStateOf(AudioGuardService.isPersistentChannelBlocked(context))
+    }
+    var statusAlertWhenPersistentHidden by remember {
+        mutableStateOf(AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(context))
+    }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isStartingBuiltinDownload by remember { mutableStateOf(false) }
     var updateCheckResult by remember { mutableStateOf<UpdateCheckResult?>(null) }
@@ -148,6 +156,10 @@ private fun AudioGuardScreen() {
         enhancedEnabled = AudioGuardApp.isEnhancedModeEnabled(context)
         classicBluetoothSoftGuardEnabled = AudioGuardApp.isClassicBluetoothSoftGuardEnabled(context)
         classicBluetoothWidebandEnabled = AudioGuardApp.isClassicBluetoothWidebandEnabled(context)
+        notificationsEnabled = AudioGuardService.areNotificationsEnabled(context)
+        persistentChannelBlocked = AudioGuardService.isPersistentChannelBlocked(context)
+        statusAlertWhenPersistentHidden =
+            AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
             status = monitor.getStatus()
@@ -367,6 +379,7 @@ private fun AudioGuardScreen() {
         } else {
             val observer = LifecycleEventObserver { _, event ->
                 if (event == Lifecycle.Event.ON_RESUME) {
+                    AudioGuardService.cancelAlertNotification(context)
                     showPermissionWarning = PermissionChecker.checkAllPermissions(context).any { !it.isGranted }
                     tileAdded = AudioGuardApp.isTileAdded(context)
                     probeExistingTileIfNeeded()
@@ -502,6 +515,11 @@ private fun AudioGuardScreen() {
         (status == GuardStatus.HIJACKED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE)
     val showTilePrompt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !tileAdded
     val runtimeHintMessage = if (canManualReleaseHeldRoute) null else heldRouteMessage
+    val notificationSummary = guardNotificationSummary(
+        notificationsEnabled = notificationsEnabled,
+        persistentChannelBlocked = persistentChannelBlocked,
+        statusAlertWhenPersistentHidden = statusAlertWhenPersistentHidden
+    )
     val toolsSubtitle = if (tileAdded) {
         "控制中心磁贴已添加，可在通知栏快捷开启或关闭保护。"
     } else {
@@ -696,6 +714,56 @@ private fun AudioGuardScreen() {
                             }
                         }
                     )
+                }
+
+                SectionSurface(
+                    title = "通知与提醒",
+                    subtitle = notificationSummary
+                ) {
+                    MergedTextBlock {
+                        Text(
+                            "想减少打扰时，可关闭“读屏保护常驻提示”。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "建议保持“读屏异常短提醒”开启。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    HorizontalDivider()
+
+                    SettingsToggleRow(
+                        checked = statusAlertWhenPersistentHidden,
+                        title = "常驻关闭时改用短提醒",
+                        summary = "建议保持开启。关闭常驻后，异常和修复状态会改用短提醒，且始终只保留一条并自动清理。",
+                        onToggle = { enabled ->
+                            statusAlertWhenPersistentHidden = enabled
+                            AudioGuardApp.setStatusAlertWhenPersistentHiddenEnabled(context, enabled)
+                            if (!enabled) {
+                                AudioGuardService.cancelAlertNotification(context)
+                            }
+                            scope.launch {
+                                delay(200)
+                                refreshState()
+                            }
+                        }
+                    )
+
+                    HorizontalDivider()
+
+                    OutlinedButton(
+                        onClick = {
+                            if (!openGuardNotificationSettings(context)) {
+                                updateActionMessage = "无法打开应用通知设置，请手动前往系统设置处理"
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("打开应用通知设置")
+                    }
                 }
 
                 SectionSurface(
@@ -946,6 +1014,26 @@ private fun guardStatusSummary(
 
         GuardStatus.NO_HEADSET ->
             "接入耳机后会自动开始保护。"
+    }
+}
+
+private fun guardNotificationSummary(
+    notificationsEnabled: Boolean,
+    persistentChannelBlocked: Boolean,
+    statusAlertWhenPersistentHidden: Boolean,
+): String {
+    return when {
+        !notificationsEnabled ->
+            "系统已关闭本应用通知。常驻和短提醒当前都不会显示。"
+
+        persistentChannelBlocked && statusAlertWhenPersistentHidden ->
+            "你已关闭常驻提示，当前会改用短提醒。这是更推荐的低打扰设置。"
+
+        persistentChannelBlocked ->
+            "你已关闭常驻提示，但短提醒也关了。建议重新打开短提醒。"
+
+        else ->
+            "当前仍显示常驻提示。如觉得打扰，可在系统里关闭它，并保留短提醒。"
     }
 }
 
@@ -1351,6 +1439,30 @@ private fun openExternalUrl(context: Context, url: String): Boolean {
         true
     } catch (_: Exception) {
         false
+    }
+}
+
+private fun openGuardNotificationSettings(context: Context): Boolean {
+    val appIntent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    val appDetailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:${context.packageName}")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    return try {
+        context.startActivity(appIntent)
+        true
+    } catch (_: Exception) {
+        try {
+            context.startActivity(appDetailsIntent)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 }
 

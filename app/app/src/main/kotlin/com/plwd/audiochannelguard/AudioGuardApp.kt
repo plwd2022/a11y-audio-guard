@@ -15,6 +15,8 @@ class AudioGuardApp : Application() {
 
     companion object {
         private const val PREFS_NAME = "audio_guard_prefs"
+        private const val STALE_PERSISTENT_NOTIFICATION_CHANNEL_ID =
+            "audio_guard_persistent_channel"
         private const val KEY_ENABLED = "guard_enabled"
         private const val KEY_ENHANCED_MODE = "enhanced_mode"
         private const val KEY_CLASSIC_BLUETOOTH_SOFT_GUARD = "classic_bluetooth_soft_guard"
@@ -22,6 +24,8 @@ class AudioGuardApp : Application() {
         private const val KEY_TILE_ADDED = "tile_added"
         private const val KEY_AUTO_START_CONFIRMED = "auto_start_confirmed"
         private const val KEY_BG_RESTRICT_CONFIRMED = "bg_restrict_confirmed"
+        private const val KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN =
+            "status_alert_when_persistent_hidden"
 
         // Release keystore (plwd_cn.keystore) signing certificate SHA-256
         private const val EXPECTED_CERT_HASH =
@@ -120,11 +124,21 @@ class AudioGuardApp : Application() {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_BG_RESTRICT_CONFIRMED, confirmed).apply()
         }
+
+        fun isStatusAlertWhenPersistentHiddenEnabled(context: Context): Boolean {
+            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .getBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, true)
+        }
+
+        fun setStatusAlertWhenPersistentHiddenEnabled(context: Context, enabled: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+                .edit().putBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, enabled).apply()
+        }
     }
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        createNotificationChannels()
         AppUpdateManager.getInstance(this).handleAppLaunchCleanup()
         if (!verifySignature()) {
             isTampered = true
@@ -278,15 +292,29 @@ class AudioGuardApp : Application() {
         }
     }
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            AudioGuardService.CHANNEL_ID,
-            "读屏声音保护",
+    private fun createNotificationChannels() {
+        val persistentChannel = NotificationChannel(
+            AudioGuardService.PERSISTENT_CHANNEL_ID,
+            "读屏保护常驻提示（嫌打扰可关闭）",
             NotificationManager.IMPORTANCE_LOW
         ).apply {
-            description = "显示读屏声音保护运行状态"
+            description = "表示保护正在后台运行；如果觉得通知栏太烦，可以关闭它"
+            setShowBadge(false)
+            enableVibration(false)
         }
+
+        val alertChannel = NotificationChannel(
+            AudioGuardService.ALERT_CHANNEL_ID,
+            "读屏异常短提醒（建议保持开启）",
+            NotificationManager.IMPORTANCE_LOW
+        ).apply {
+            description = "检测到外放、已收回耳机等关键状态时短暂提醒，并会自动清理"
+            setShowBadge(false)
+            enableVibration(false)
+        }
+
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(channel)
+        nm.createNotificationChannels(listOf(persistentChannel, alertChannel))
+        nm.deleteNotificationChannel(STALE_PERSISTENT_NOTIFICATION_CHANNEL_ID)
     }
 }

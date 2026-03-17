@@ -14,10 +14,12 @@ import androidx.core.app.NotificationCompat
 class AudioGuardService : Service() {
 
     companion object {
-        const val CHANNEL_ID = "audio_guard_channel"
-        const val NOTIFICATION_ID = 1
+        const val PERSISTENT_CHANNEL_ID = "audio_guard_channel"
+        const val ALERT_CHANNEL_ID = "audio_guard_alert_channel"
+        const val PERSISTENT_NOTIFICATION_ID = 1
+        const val ALERT_NOTIFICATION_ID = 2
         private const val TAG = "AudioGuardService"
-        private const val ACTION_TRY_RELEASE_HELD_ROUTE =
+        const val ACTION_TRY_RELEASE_HELD_ROUTE =
             "com.plwd.audiochannelguard.action.TRY_RELEASE_HELD_ROUTE"
 
         private var instance: AudioGuardService? = null
@@ -47,6 +49,43 @@ class AudioGuardService : Service() {
             return startServiceSafely(context, ACTION_TRY_RELEASE_HELD_ROUTE)
         }
 
+        fun refreshNotifications() {
+            instance?.refreshNotifications()
+        }
+
+        fun cancelAlertNotification(context: Context) {
+            val service = instance
+            if (service != null && service::alertController.isInitialized) {
+                service.alertController.clear()
+            } else {
+                context.applicationContext.getSystemService(NotificationManager::class.java)
+                    .cancel(ALERT_NOTIFICATION_ID)
+            }
+        }
+
+        fun areNotificationsEnabled(context: Context): Boolean {
+            return context.applicationContext.getSystemService(NotificationManager::class.java)
+                .areNotificationsEnabled()
+        }
+
+        fun isPersistentChannelBlocked(context: Context): Boolean {
+            val channel = context.applicationContext.getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(PERSISTENT_CHANNEL_ID)
+            return channel?.importance == NotificationManager.IMPORTANCE_NONE
+        }
+
+        fun createReleaseHeldRoutePendingIntent(context: Context): PendingIntent {
+            val appContext = context.applicationContext
+            return PendingIntent.getService(
+                appContext,
+                1,
+                Intent(appContext, AudioGuardService::class.java).apply {
+                    action = ACTION_TRY_RELEASE_HELD_ROUTE
+                },
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            )
+        }
+
         private fun startServiceSafely(context: Context, action: String? = null): Boolean {
             val appContext = context.applicationContext
             val intent = Intent(appContext, AudioGuardService::class.java).apply {
@@ -73,24 +112,29 @@ class AudioGuardService : Service() {
     }
 
     private lateinit var monitor: AudioRouteMonitor
+    private lateinit var alertController: GuardStatusAlertController
     private val monitorStatusListener: (GuardStatus) -> Unit = { status ->
-        updateNotification(status)
+        refreshNotifications(status)
     }
     private val monitorEnhancedStateListener: (EnhancedState) -> Unit = {
         if (::monitor.isInitialized) {
-            updateNotification(monitor.getStatus())
+            refreshNotifications()
         }
     }
 
     override fun onCreate() {
         super.onCreate()
         if (AudioGuardApp.isTampered) {
-            startForeground(NOTIFICATION_ID, buildNotification("签名校验失败"))
+            startForeground(
+                PERSISTENT_NOTIFICATION_ID,
+                buildPersistentNotification("签名校验失败")
+            )
             AudioGuardApp.setGuardEnabled(this, false)
             stopSelf()
             return
         }
         instance = this
+        alertController = GuardStatusAlertController(this)
 
         monitor = AudioRouteMonitor(this)
         monitor.setEnhancedModeEnabled(AudioGuardApp.isEnhancedModeEnabled(this))
@@ -99,13 +143,22 @@ class AudioGuardService : Service() {
         monitor.addStatusListener(monitorStatusListener)
         monitor.addEnhancedStateListener(monitorEnhancedStateListener)
 
-        startForeground(NOTIFICATION_ID, buildNotification("正在保护读屏声音"))
+        startForeground(
+            PERSISTENT_NOTIFICATION_ID,
+            buildPersistentNotification("正在保护读屏声音")
+        )
         monitor.start()
+        refreshNotifications()
         AudioFixTile.requestTileRefresh(this)
         rebindListeners.forEach { it.onRebind(monitor) }
     }
 
     override fun onDestroy() {
+        if (::alertController.isInitialized) {
+            alertController.clear()
+        } else {
+            cancelAlertNotification(this)
+        }
         if (::monitor.isInitialized) {
             monitor.removeStatusListener(monitorStatusListener)
             monitor.removeEnhancedStateListener(monitorEnhancedStateListener)
@@ -130,12 +183,20 @@ class AudioGuardService : Service() {
             intent?.action == ACTION_TRY_RELEASE_HELD_ROUTE
         ) {
             monitor.tryManualReleaseHeldRoute("通知栏尝试解除外放占用")
-            updateNotification(monitor.getStatus())
+            refreshNotifications()
         }
         return START_STICKY
     }
 
-    private fun updateNotification(status: GuardStatus) {
+    private fun refreshNotifications(status: GuardStatus = monitor.getStatus()) {
+        updatePersistentNotification(status)
+        if (::alertController.isInitialized) {
+            alertController.onStateChanged(buildAlertSnapshot(status))
+        }
+        AudioFixTile.requestTileRefresh(this)
+    }
+
+    private fun updatePersistentNotification(status: GuardStatus) {
         val heldRouteMessage = monitor.getHeldRouteMessage()
         val text = when {
             heldRouteMessage != null -> heldRouteMessage
@@ -158,8 +219,7 @@ class AudioGuardService : Service() {
         }
         }
         val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification(text))
-        AudioFixTile.requestTileRefresh(this)
+        nm.notify(PERSISTENT_NOTIFICATION_ID, buildPersistentNotification(text))
     }
 
     private fun defaultStatusText(status: GuardStatus): String {
@@ -178,31 +238,39 @@ class AudioGuardService : Service() {
         }
     }
 
-    private fun buildNotification(text: String): Notification {
+    private fun buildAlertSnapshot(status: GuardStatus): GuardStatusAlertController.Snapshot {
+        val headsetName = monitor.findConnectedHeadset()?.productName?.toString()
+        return GuardStatusAlertController.Snapshot(
+            status = status,
+            headsetName = headsetName,
+            hasHeadset = headsetName != null,
+            heldRouteMessage = monitor.getHeldRouteMessage(),
+            canManuallyReleaseHeldRoute = monitor.canManuallyReleaseHeldRoute(),
+        )
+    }
+
+    private fun buildPersistentNotification(text: String): Notification {
         val contentIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         val pendingContentIntent = PendingIntent.getActivity(
-            this, 0, contentIntent, PendingIntent.FLAG_IMMUTABLE
+            this, 0, contentIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, PERSISTENT_CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_headset)
             .setContentIntent(pendingContentIntent)
+            .setOnlyAlertOnce(true)
             .setOngoing(true)
 
         if (::monitor.isInitialized && monitor.canManuallyReleaseHeldRoute()) {
-            val actionIntent = PendingIntent.getService(
-                this,
-                1,
-                Intent(this, AudioGuardService::class.java).apply {
-                    action = ACTION_TRY_RELEASE_HELD_ROUTE
-                },
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+            builder.addAction(
+                R.drawable.ic_headset,
+                "尝试解除外放占用",
+                createReleaseHeldRoutePendingIntent(this)
             )
-            builder.addAction(R.drawable.ic_headset, "尝试解除外放占用", actionIntent)
         }
 
         return builder.build()
