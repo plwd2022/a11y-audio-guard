@@ -41,7 +41,7 @@ class UpdateChecker(private val context: Context) {
         private const val KEY_LAST_AUTO_CHECK_AT = "last_auto_check_at"
         private const val KEY_LAST_AUTO_CHECK_FAILURE_AT = "last_auto_check_failure_at"
         private const val KEY_LAST_AUTO_PROMPTED_VERSION = "last_auto_prompted_version"
-        private const val AUTO_CHECK_INTERVAL_MS = 24L * 60L * 60L * 1000L
+        private const val AUTO_CHECK_INTERVAL_MS = 6L * 60L * 60L * 1000L
         private const val AUTO_CHECK_FAILURE_RETRY_MS = 2L * 60L * 1000L
     }
 
