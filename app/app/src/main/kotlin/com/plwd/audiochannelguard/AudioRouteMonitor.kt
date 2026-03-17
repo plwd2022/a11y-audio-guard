@@ -5,9 +5,14 @@ import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import java.util.concurrent.Callable
+import java.util.concurrent.Executor
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
 
 data class FixEvent(
     val timestamp: Long,
@@ -99,11 +104,18 @@ class AudioRouteMonitor(private val context: Context) {
 
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-    private val handler = Handler(Looper.getMainLooper())
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val monitorThread = HandlerThread("AudioRouteMonitor").apply { start() }
+    private val handler = Handler(monitorThread.looper)
+    private val callbackExecutor = Executor { runnable ->
+        handler.post(runnable)
+    }
+    private val listenerLock = Any()
     private val classicBluetoothSoftGuard = AccessibilitySoftRouteGuard(
         callbackHandler = handler,
         onRoutedDeviceChanged = ::handleClassicBluetoothSoftGuardRouteChanged
     )
+    @Volatile
     private var running = false
 
     private var pollingMode = PollingMode.IDLE
@@ -173,40 +185,56 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private val _fixLog = mutableListOf<FixEvent>()
-    val fixLog: List<FixEvent> get() = _fixLog.toList()
+    val fixLog: List<FixEvent>
+        get() = callOnMonitorThread(emptyList()) { _fixLog.toList() }
 
     var onStatusChanged: ((GuardStatus) -> Unit)? = null
     private fun reportStatus(status: GuardStatus) {
         lastReportedStatus = status
-        onStatusChanged?.invoke(status)
-        statusListeners.toList().forEach { it(status) }
+        val listeners = synchronized(listenerLock) { statusListeners.toList() }
+        postToMainThread {
+            onStatusChanged?.invoke(status)
+            listeners.forEach { it(status) }
+        }
     }
 
     var onFixLogUpdated: (() -> Unit)? = null
     var onEnhancedStateChanged: ((EnhancedState) -> Unit)? = null
 
     fun addStatusListener(listener: (GuardStatus) -> Unit) {
-        statusListeners.add(listener)
+        synchronized(listenerLock) {
+            statusListeners.add(listener)
+        }
     }
 
     fun removeStatusListener(listener: (GuardStatus) -> Unit) {
-        statusListeners.remove(listener)
+        synchronized(listenerLock) {
+            statusListeners.remove(listener)
+        }
     }
 
     fun addFixLogListener(listener: () -> Unit) {
-        fixLogListeners.add(listener)
+        synchronized(listenerLock) {
+            fixLogListeners.add(listener)
+        }
     }
 
     fun removeFixLogListener(listener: () -> Unit) {
-        fixLogListeners.remove(listener)
+        synchronized(listenerLock) {
+            fixLogListeners.remove(listener)
+        }
     }
 
     fun addEnhancedStateListener(listener: (EnhancedState) -> Unit) {
-        enhancedStateListeners.add(listener)
+        synchronized(listenerLock) {
+            enhancedStateListeners.add(listener)
+        }
     }
 
     fun removeEnhancedStateListener(listener: (EnhancedState) -> Unit) {
-        enhancedStateListeners.remove(listener)
+        synchronized(listenerLock) {
+            enhancedStateListeners.remove(listener)
+        }
     }
 
     private val modeChangedListener =
@@ -954,223 +982,257 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     fun start() {
-        if (running) return
-        running = true
-        // Use a handler-backed executor to avoid mainExecutor callback delays in background.
-        val callbackHandler = Handler(handler.looper)
-        audioManager.addOnCommunicationDeviceChangedListener(
-            { callbackHandler.post(it) }, commDeviceListener
-        )
-        audioManager.registerAudioDeviceCallback(deviceCallback, handler)
-        if (enhancedModeEnabled) {
-            registerModeListenerIfNeeded()
-        }
-        addLog("守护已启动")
-        val headset = findConnectedHeadset()
-        if (headset == null) {
+        runOnMonitorThread {
+            if (running) return@runOnMonitorThread
+            running = true
+            audioManager.addOnCommunicationDeviceChangedListener(
+                callbackExecutor,
+                commDeviceListener
+            )
+            audioManager.registerAudioDeviceCallback(deviceCallback, handler)
             if (enhancedModeEnabled) {
-                updateEnhancedState(EnhancedState.WAITING_HEADSET)
+                registerModeListenerIfNeeded()
             }
-            reportStatus(GuardStatus.NO_HEADSET)
-        } else if (enhancedModeEnabled) {
-            refreshEnhancedObservationState("增强守护启动", headset)
-        } else if (audioManager.communicationDevice?.type in BUILTIN_TYPES) {
-            if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
-                val builtInType = audioManager.communicationDevice?.type
-                startClassicBluetoothStartupObservation(
-                    headset = headset,
-                    builtInType = builtInType,
-                    reason = "启动时通信设备显示为${builtinDeviceName(builtInType)}"
-                )
+            addLog("守护已启动")
+            val headset = findConnectedHeadset()
+            if (headset == null) {
+                if (enhancedModeEnabled) {
+                    updateEnhancedState(EnhancedState.WAITING_HEADSET)
+                }
+                reportStatus(GuardStatus.NO_HEADSET)
+            } else if (enhancedModeEnabled) {
+                refreshEnhancedObservationState("增强守护启动", headset)
+            } else if (audioManager.communicationDevice?.type in BUILTIN_TYPES) {
+                if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+                    val builtInType = audioManager.communicationDevice?.type
+                    startClassicBluetoothStartupObservation(
+                        headset = headset,
+                        builtInType = builtInType,
+                        reason = "启动时通信设备显示为${builtinDeviceName(builtInType)}"
+                    )
+                } else {
+                    restoreCommunicationToHeadset(
+                        preferredOutputDevice = headset,
+                        reason = "启动时检测到声道仍在${builtinDeviceName(audioManager.communicationDevice?.type)}"
+                    )
+                    startRecoveryWindow("启动阶段检测到内建设备")
+                }
             } else {
-                restoreCommunicationToHeadset(
-                    preferredOutputDevice = headset,
-                    reason = "启动时检测到声道仍在${builtinDeviceName(audioManager.communicationDevice?.type)}"
-                )
-                startRecoveryWindow("启动阶段检测到内建设备")
+                reportStatus(GuardStatus.NORMAL)
             }
-        } else {
-            reportStatus(GuardStatus.NORMAL)
+            syncClassicBluetoothSoftGuard("守护启动后同步保真守护")
         }
-        syncClassicBluetoothSoftGuard("守护启动后同步保真守护")
     }
 
     fun stop() {
-        if (!running) return
-        running = false
-        handler.removeCallbacks(reacquireEnhancedRunnable)
-        stopClearProbe("守护停止")
-        stopClassicBluetoothConfirm("守护停止", announce = false)
-        stopClassicBluetoothStartupObservation("守护停止", announce = false)
-        stopRecoveryWindow("守护停止")
-        stopReleaseProbe("守护停止")
-        unregisterModeListenerIfNeeded()
-        tryLeaveCommunicationMode("守护停止")
-        classicBluetoothWidebandAttemptTimesMs.clear()
-        clearBuiltinRouteEvidence()
-        clearHeldRouteState()
-        stopClassicBluetoothSoftGuard("守护停止")
-        audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
-        audioManager.unregisterAudioDeviceCallback(deviceCallback)
-        clearCommunicationDeviceSafely()
-        updateEnhancedState(EnhancedState.DISABLED)
-        addLog("守护已停止")
+        callOnMonitorThread(Unit) {
+            if (running) {
+                running = false
+                handler.removeCallbacks(reacquireEnhancedRunnable)
+                stopClearProbe("守护停止")
+                stopClassicBluetoothConfirm("守护停止", announce = false)
+                stopClassicBluetoothStartupObservation("守护停止", announce = false)
+                stopRecoveryWindow("守护停止")
+                stopReleaseProbe("守护停止")
+                unregisterModeListenerIfNeeded()
+                tryLeaveCommunicationMode("守护停止")
+                classicBluetoothWidebandAttemptTimesMs.clear()
+                clearBuiltinRouteEvidence()
+                clearHeldRouteState()
+                stopClassicBluetoothSoftGuard("守护停止")
+                audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
+                audioManager.unregisterAudioDeviceCallback(deviceCallback)
+                clearCommunicationDeviceSafely()
+                updateEnhancedState(EnhancedState.DISABLED)
+                addLog("守护已停止")
+            }
+            monitorThread.quitSafely()
+        }
     }
 
     fun fixNow(): Boolean {
-        if (enhancedModeEnabled) {
-            tryEnterCommunicationMode("用户手动触发修复")
-        }
-        val fixed = restoreCommunicationToHeadset(reason = "手动修复：尝试恢复声道")
-        if (fixed) {
+        return callOnMonitorThread(false) {
             if (enhancedModeEnabled) {
-                updateEnhancedState(EnhancedState.ACTIVE)
+                tryEnterCommunicationMode("用户手动触发修复")
             }
-            startRecoveryWindow("用户手动触发修复")
+            val fixed = restoreCommunicationToHeadset(reason = "手动修复：尝试恢复声道")
+            if (fixed) {
+                if (enhancedModeEnabled) {
+                    updateEnhancedState(EnhancedState.ACTIVE)
+                }
+                startRecoveryWindow("用户手动触发修复")
+            }
+            fixed
         }
-        return fixed
     }
 
     fun setEnhancedModeEnabled(enabled: Boolean) {
-        if (enhancedModeEnabled == enabled) {
-            if (running && enabled) {
-                refreshEnhancedObservationState("增强守护配置已同步")
+        runOnMonitorThread {
+            if (enhancedModeEnabled == enabled) {
+                if (running && enabled) {
+                    refreshEnhancedObservationState("增强守护配置已同步")
+                }
+                return@runOnMonitorThread
             }
-            return
-        }
 
-        enhancedModeEnabled = enabled
-        if (!running) {
-            updateEnhancedState(if (enabled) EnhancedState.WAITING_HEADSET else EnhancedState.DISABLED)
-            return
-        }
+            enhancedModeEnabled = enabled
+            if (!running) {
+                updateEnhancedState(if (enabled) EnhancedState.WAITING_HEADSET else EnhancedState.DISABLED)
+                return@runOnMonitorThread
+            }
 
-        if (enabled) {
-            stopClassicBluetoothConfirm("增强守护已开启", announce = false)
-            stopClassicBluetoothStartupObservation("增强守护已开启", announce = false)
-            registerModeListenerIfNeeded()
-            refreshEnhancedObservationState("增强守护已开启")
-        } else {
-            handler.removeCallbacks(reacquireEnhancedRunnable)
-            stopClearProbe("增强守护已关闭")
-            stopClassicBluetoothConfirm("增强守护已关闭", announce = false)
-            stopClassicBluetoothStartupObservation("增强守护已关闭", announce = false)
-            stopRecoveryWindow("增强守护已关闭")
-            stopReleaseProbe("增强守护已关闭")
-            unregisterModeListenerIfNeeded()
-            tryLeaveCommunicationMode("增强守护已关闭")
-            clearHeldRouteState()
-            clearCommunicationDeviceSafely()
-            updateEnhancedState(EnhancedState.DISABLED)
+            if (enabled) {
+                stopClassicBluetoothConfirm("增强守护已开启", announce = false)
+                stopClassicBluetoothStartupObservation("增强守护已开启", announce = false)
+                registerModeListenerIfNeeded()
+                refreshEnhancedObservationState("增强守护已开启")
+            } else {
+                handler.removeCallbacks(reacquireEnhancedRunnable)
+                stopClearProbe("增强守护已关闭")
+                stopClassicBluetoothConfirm("增强守护已关闭", announce = false)
+                stopClassicBluetoothStartupObservation("增强守护已关闭", announce = false)
+                stopRecoveryWindow("增强守护已关闭")
+                stopReleaseProbe("增强守护已关闭")
+                unregisterModeListenerIfNeeded()
+                tryLeaveCommunicationMode("增强守护已关闭")
+                clearHeldRouteState()
+                clearCommunicationDeviceSafely()
+                updateEnhancedState(EnhancedState.DISABLED)
+            }
+            syncClassicBluetoothSoftGuard("增强守护配置变化")
         }
-        syncClassicBluetoothSoftGuard("增强守护配置变化")
     }
 
-    fun isEnhancedModeEnabled(): Boolean = enhancedModeEnabled
+    fun isEnhancedModeEnabled(): Boolean = callOnMonitorThread(false) { enhancedModeEnabled }
 
     fun setClassicBluetoothSoftGuardEnabled(enabled: Boolean) {
-        if (classicBluetoothSoftGuardEnabled == enabled) return
-        classicBluetoothSoftGuardEnabled = enabled
-        if (!enabled) {
-            stopClassicBluetoothStartupObservation("经典蓝牙保真守护已关闭", announce = false)
+        runOnMonitorThread {
+            if (classicBluetoothSoftGuardEnabled == enabled) return@runOnMonitorThread
+            classicBluetoothSoftGuardEnabled = enabled
+            if (!enabled) {
+                stopClassicBluetoothStartupObservation("经典蓝牙保真守护已关闭", announce = false)
+            }
+            syncClassicBluetoothSoftGuard("经典蓝牙保真守护配置变化")
         }
-        syncClassicBluetoothSoftGuard("经典蓝牙保真守护配置变化")
     }
 
-    fun isClassicBluetoothSoftGuardEnabled(): Boolean = classicBluetoothSoftGuardEnabled
+    fun isClassicBluetoothSoftGuardEnabled(): Boolean =
+        callOnMonitorThread(false) { classicBluetoothSoftGuardEnabled }
 
     fun setClassicBluetoothWidebandEnabled(enabled: Boolean) {
-        if (classicBluetoothWidebandEnabled == enabled) return
-        classicBluetoothWidebandEnabled = enabled
-        if (!enabled) {
-            classicBluetoothWidebandAttemptTimesMs.clear()
+        runOnMonitorThread {
+            if (classicBluetoothWidebandEnabled == enabled) return@runOnMonitorThread
+            classicBluetoothWidebandEnabled = enabled
+            if (!enabled) {
+                classicBluetoothWidebandAttemptTimesMs.clear()
+            }
         }
     }
 
-    fun isClassicBluetoothWidebandEnabled(): Boolean = classicBluetoothWidebandEnabled
+    fun isClassicBluetoothWidebandEnabled(): Boolean =
+        callOnMonitorThread(false) { classicBluetoothWidebandEnabled }
 
     fun canManuallyReleaseHeldRoute(): Boolean {
-        val headset = findConnectedHeadset()
-        return headset != null &&
-            hasActiveHeldRoute(headset) &&
-            !heldRouteManualReleaseInProgress
+        return callOnMonitorThread(false) {
+            val headset = findConnectedHeadset()
+            headset != null &&
+                hasActiveHeldRoute(headset) &&
+                !heldRouteManualReleaseInProgress
+        }
     }
 
     fun getHeldRouteMessage(): String? {
-        return if (heldRouteManualReleaseInProgress || hasActiveHeldRoute()) {
-            heldRouteMessage
-        } else {
-            null
+        return callOnMonitorThread<String?>(null) {
+            if (heldRouteManualReleaseInProgress || hasActiveHeldRoute()) {
+                heldRouteMessage
+            } else {
+                null
+            }
         }
     }
 
     fun tryManualReleaseHeldRoute(trigger: String): Boolean {
-        if (!running || !hasGuardCommunicationHold()) return false
+        return callOnMonitorThread(false) {
+            if (!running || !hasGuardCommunicationHold()) return@callOnMonitorThread false
 
-        val headset = findConnectedHeadset() ?: return false
-        if (!hasActiveHeldRoute(headset) || heldRouteManualReleaseInProgress) return false
+            val headset = findConnectedHeadset() ?: return@callOnMonitorThread false
+            if (!hasActiveHeldRoute(headset) || heldRouteManualReleaseInProgress) {
+                return@callOnMonitorThread false
+            }
 
-        val kind = heldRouteKindFor(headset)
-        heldRouteManualReleaseInProgress = true
-        heldRouteHeadsetKey = deviceIdentityKey(headset)
-        heldRouteKind = kind
-        heldRouteMessage = "正在尝试归还${heldRouteSubject(kind)}控制权"
-        notifyCurrentStatusChanged()
-        startReleaseProbe(headset, "$trigger，尝试归还${heldRouteSubject(kind)}控制权")
-        return true
+            val kind = heldRouteKindFor(headset)
+            heldRouteManualReleaseInProgress = true
+            heldRouteHeadsetKey = deviceIdentityKey(headset)
+            heldRouteKind = kind
+            heldRouteMessage = "正在尝试归还${heldRouteSubject(kind)}控制权"
+            notifyCurrentStatusChanged()
+            startReleaseProbe(headset, "$trigger，尝试归还${heldRouteSubject(kind)}控制权")
+            true
+        }
     }
 
     fun getEnhancedState(): EnhancedState {
-        return if (enhancedModeEnabled) enhancedState else EnhancedState.DISABLED
+        return callOnMonitorThread(EnhancedState.DISABLED) {
+            if (enhancedModeEnabled) enhancedState else EnhancedState.DISABLED
+        }
     }
 
     fun getStatus(): GuardStatus {
-        val headset = findConnectedHeadset()
-        if (headset == null) return GuardStatus.NO_HEADSET
-        val commDevice = audioManager.communicationDevice
-        return if (pollingMode == PollingMode.CLEAR_PROBE) {
-            GuardStatus.HIJACKED
-        } else if (commDevice?.type in BUILTIN_TYPES) {
-            if (
-                shouldUsePassiveClassicBluetoothConfirmation(headset) &&
-                (!hasRecentBuiltinRouteEvidence() || hasClassicBluetoothStartupObservation())
-            ) {
-                GuardStatus.NORMAL
-            } else
-            if (lastReportedStatus == GuardStatus.FIXED && pollingMode == PollingMode.IDLE) {
-                GuardStatus.FIXED_BUT_SPEAKER_ROUTE
-            } else {
+        return callOnMonitorThread(GuardStatus.NO_HEADSET) {
+            val headset = findConnectedHeadset()
+            if (headset == null) return@callOnMonitorThread GuardStatus.NO_HEADSET
+            val commDevice = audioManager.communicationDevice
+            if (pollingMode == PollingMode.CLEAR_PROBE) {
                 GuardStatus.HIJACKED
-            }
-        } else if (hasActiveHeldRoute(headset) && hasGuardCommunicationHold()) {
-            GuardStatus.FIXED
-        } else if (lastReportedStatus == GuardStatus.FIXED) {
-            GuardStatus.FIXED
-        } else {
-            GuardStatus.NORMAL
+            } else if (commDevice?.type in BUILTIN_TYPES) {
+                if (
+                    shouldUsePassiveClassicBluetoothConfirmation(headset) &&
+                    (!hasRecentBuiltinRouteEvidence() || hasClassicBluetoothStartupObservation())
+                ) {
+                    GuardStatus.NORMAL
+                } else
+                if (lastReportedStatus == GuardStatus.FIXED && pollingMode == PollingMode.IDLE) {
+                    GuardStatus.FIXED_BUT_SPEAKER_ROUTE
+                } else {
+                    GuardStatus.HIJACKED
+                }
+            } else if (hasActiveHeldRoute(headset) && hasGuardCommunicationHold()) {
+                GuardStatus.FIXED
+            } else if (lastReportedStatus == GuardStatus.FIXED) {
+                GuardStatus.FIXED
+            } else
+                GuardStatus.NORMAL
         }
     }
 
     fun findConnectedHeadset(): AudioDeviceInfo? {
-        return audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            .firstOrNull { it.type in HEADSET_TYPES && it.isSink }
+        return callOnMonitorThread<AudioDeviceInfo?>(null) {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .firstOrNull { it.type in HEADSET_TYPES && it.isSink }
+        }
     }
 
     fun getCommunicationDevice(): AudioDeviceInfo? {
-        return audioManager.communicationDevice
+        return callOnMonitorThread<AudioDeviceInfo?>(null) {
+            audioManager.communicationDevice
+        }
     }
 
     private fun updateEnhancedState(state: EnhancedState) {
         if (enhancedState == state) return
         enhancedState = state
-        onEnhancedStateChanged?.invoke(state)
-        enhancedStateListeners.toList().forEach { it(state) }
+        val listeners = synchronized(listenerLock) { enhancedStateListeners.toList() }
+        postToMainThread {
+            onEnhancedStateChanged?.invoke(state)
+            listeners.forEach { it(state) }
+        }
     }
 
     private fun registerModeListenerIfNeeded() {
         if (modeListenerRegistered) return
         audioManager.addOnModeChangedListener(
-            { handler.post(it) }, modeChangedListener
+            callbackExecutor,
+            modeChangedListener
         )
         modeListenerRegistered = true
     }
@@ -1785,8 +1847,12 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun notifyCurrentStatusChanged() {
-        onStatusChanged?.invoke(lastReportedStatus)
-        statusListeners.toList().forEach { it(lastReportedStatus) }
+        val status = lastReportedStatus
+        val listeners = synchronized(listenerLock) { statusListeners.toList() }
+        postToMainThread {
+            onStatusChanged?.invoke(status)
+            listeners.forEach { it(status) }
+        }
     }
 
     private fun builtinDeviceName(type: Int?): String {
@@ -1864,7 +1930,41 @@ class AudioRouteMonitor(private val context: Context) {
         Log.i(TAG, message)
         _fixLog.add(0, FixEvent(System.currentTimeMillis(), message))
         if (_fixLog.size > 50) _fixLog.removeAt(_fixLog.lastIndex)
-        onFixLogUpdated?.invoke()
-        fixLogListeners.toList().forEach { it() }
+        val listeners = synchronized(listenerLock) { fixLogListeners.toList() }
+        postToMainThread {
+            onFixLogUpdated?.invoke()
+            listeners.forEach { it() }
+        }
+    }
+
+    private fun postToMainThread(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            mainHandler.post(block)
+        }
+    }
+
+    private fun runOnMonitorThread(block: () -> Unit) {
+        if (Looper.myLooper() == handler.looper) {
+            block()
+        } else {
+            handler.post(block)
+        }
+    }
+
+    private fun <T> callOnMonitorThread(defaultValue: T, block: () -> T): T {
+        if (Looper.myLooper() == handler.looper) {
+            return block()
+        }
+        val task = FutureTask(Callable { block() })
+        if (!handler.post(task)) {
+            return defaultValue
+        }
+        return try {
+            task.get(2, TimeUnit.SECONDS)
+        } catch (_: Exception) {
+            defaultValue
+        }
     }
 }

@@ -12,7 +12,9 @@ class BootReceiver : BroadcastReceiver() {
             )
         ) {
             if (AudioGuardApp.isGuardEnabled(context)) {
-                AudioGuardService.start(context)
+                if (!AudioGuardService.start(context)) {
+                    ServiceGuard.enqueueRestart(context)
+                }
             }
         }
     }

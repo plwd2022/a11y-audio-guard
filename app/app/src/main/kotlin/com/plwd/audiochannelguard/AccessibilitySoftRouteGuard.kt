@@ -8,6 +8,7 @@ import android.media.AudioRouting
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Process
+import android.util.Log
 import kotlin.math.max
 
 class AccessibilitySoftRouteGuard(
@@ -21,6 +22,7 @@ class AccessibilitySoftRouteGuard(
     }
 
     companion object {
+        private const val TAG = "AccessibilitySoftRouteGuard"
         private const val SAMPLE_RATE_HZ = 48_000
         private const val CHANNEL_MASK = AudioFormat.CHANNEL_OUT_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
@@ -65,10 +67,20 @@ class AccessibilitySoftRouteGuard(
             val createdTrack = createTrack() ?: return false
             targetDevice = device
             routingMode = mode
-            createdTrack.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
-            applyRoutingMode(createdTrack, device, mode)
-            createdTrack.setVolume(KEEP_ALIVE_VOLUME)
-            createdTrack.play()
+            try {
+                createdTrack.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
+                applyRoutingMode(createdTrack, device, mode)
+                createdTrack.setVolume(KEEP_ALIVE_VOLUME)
+                createdTrack.play()
+            } catch (exception: IllegalStateException) {
+                Log.w(TAG, "Failed to start AudioTrack", exception)
+                releaseTrack(createdTrack)
+                return false
+            } catch (exception: RuntimeException) {
+                Log.w(TAG, "Failed to configure AudioTrack", exception)
+                releaseTrack(createdTrack)
+                return false
+            }
 
             running = true
             track = createdTrack
@@ -92,22 +104,8 @@ class AccessibilitySoftRouteGuard(
             routingMode = RoutingMode.OBSERVE
         }
 
-        currentTrack?.removeOnRoutingChangedListener(routingChangedListener)
-        try {
-            currentTrack?.pause()
-        } catch (_: IllegalStateException) {
-        }
-        try {
-            currentTrack?.flush()
-        } catch (_: IllegalStateException) {
-        }
-        try {
-            currentTrack?.stop()
-        } catch (_: IllegalStateException) {
-        }
-        currentTrack?.release()
-
-        currentThread?.join(200)
+        currentThread?.interrupt()
+        releaseTrack(currentTrack)
     }
 
     fun isRunning(): Boolean = running && track != null
@@ -134,24 +132,34 @@ class AccessibilitySoftRouteGuard(
             val minBuffer = AudioTrack.getMinBufferSize(SAMPLE_RATE_HZ, CHANNEL_MASK, ENCODING)
             val bufferSize = max(minBuffer.takeIf { it > 0 } ?: MIN_BUFFER_BYTES, MIN_BUFFER_BYTES)
 
-            AudioTrack(
+            val track = AudioTrack(
                 attrs,
                 format,
                 bufferSize,
                 AudioTrack.MODE_STREAM,
                 AudioManager.AUDIO_SESSION_ID_GENERATE
             )
+            if (track.state != AudioTrack.STATE_INITIALIZED) {
+                track.release()
+                return null
+            }
+            track
         } catch (_: IllegalArgumentException) {
             null
         } catch (_: UnsupportedOperationException) {
+            null
+        } catch (_: IllegalStateException) {
             null
         }
     }
 
     private fun startWriterThread(currentTrack: AudioTrack) {
         val thread = Thread({
-            Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
-            while (running) {
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
+            } catch (_: RuntimeException) {
+            }
+            while (running && !Thread.currentThread().isInterrupted) {
                 try {
                     val written = currentTrack.write(
                         silenceBuffer,
@@ -164,12 +172,32 @@ class AccessibilitySoftRouteGuard(
                     }
                 } catch (_: IllegalStateException) {
                     break
+                } catch (_: RuntimeException) {
+                    break
                 }
             }
         }, "AccessibilitySoftRouteGuard")
         thread.isDaemon = true
         writerThread = thread
         thread.start()
+    }
+
+    private fun releaseTrack(currentTrack: AudioTrack?) {
+        currentTrack ?: return
+        currentTrack.removeOnRoutingChangedListener(routingChangedListener)
+        try {
+            currentTrack.pause()
+        } catch (_: IllegalStateException) {
+        }
+        try {
+            currentTrack.flush()
+        } catch (_: IllegalStateException) {
+        }
+        try {
+            currentTrack.stop()
+        } catch (_: IllegalStateException) {
+        }
+        currentTrack.release()
     }
 
     private fun applyRoutingMode(

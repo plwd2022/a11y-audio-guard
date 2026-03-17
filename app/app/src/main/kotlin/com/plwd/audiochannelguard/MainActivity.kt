@@ -968,8 +968,7 @@ private fun AboutDialog(
 
                 OutlinedButton(
                     onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW,
-                            Uri.parse("https://github.com/plwd2022/a11y-audio-guard")))
+                        openExternalUrl(context, "https://github.com/plwd2022/a11y-audio-guard")
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -978,8 +977,10 @@ private fun AboutDialog(
 
                 OutlinedButton(
                     onClick = {
-                        context.startActivity(Intent(Intent.ACTION_VIEW,
-                            Uri.parse("https://qun.qq.com/universal-share/share?ac=1&authKey=sdEDI3L1gxwftS%2Faw0L%2FSZLavRZ0bNvqtz3UXYzNgRSSXgK%2FKNJZAYRxHmGKp2Pi&busi_data=eyJncm91cENvZGUiOiIxMDMxNTY2MzEwIiwidG9rZW4iOiI3OCtzMnlrbld6K3V0WUZocVdmTjRhZnFxR3J2bk1ybkJvMEFaQ3RjN1lINXo1azA0U01MSFhyaFhhVE1MS0FPIiwidWluIjoiMjg0MTkwNTI2NSJ9&data=vC3VZm0hSM3jcAOYSLpTZLieWHPLyHSNFnv90CtY_Z4je4_eE3XfSiYiz0bYXfzMQuTyRjIRLhgyfCQptV-ARg&svctype=4&tempid=h5_group_info")))
+                        openExternalUrl(
+                            context,
+                            "https://qun.qq.com/universal-share/share?ac=1&authKey=sdEDI3L1gxwftS%2Faw0L%2FSZLavRZ0bNvqtz3UXYzNgRSSXgK%2FKNJZAYRxHmGKp2Pi&busi_data=eyJncm91cENvZGUiOiIxMDMxNTY2MzEwIiwidG9rZW4iOiI3OCtzMnlrbld6K3V0WUZocVdmTjRhZnFxR3J2bk1ybkJvMEFaQ3RjN1lINXo1azA0U01MSFhyaFhhVE1MS0FPIiwidWluIjoiMjg0MTkwNTI2NSJ9&data=vC3VZm0hSM3jcAOYSLpTZLieWHPLyHSNFnv90CtY_Z4je4_eE3XfSiYiz0bYXfzMQuTyRjIRLhgyfCQptV-ARg&svctype=4&tempid=h5_group_info"
+                        )
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {

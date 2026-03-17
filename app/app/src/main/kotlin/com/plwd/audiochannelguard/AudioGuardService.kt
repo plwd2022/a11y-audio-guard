@@ -1,12 +1,14 @@
 package com.plwd.audiochannelguard
 
 import android.app.Notification
+import android.app.ForegroundServiceStartNotAllowedException
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 
 class AudioGuardService : Service() {
@@ -14,6 +16,7 @@ class AudioGuardService : Service() {
     companion object {
         const val CHANNEL_ID = "audio_guard_channel"
         const val NOTIFICATION_ID = 1
+        private const val TAG = "AudioGuardService"
         private const val ACTION_TRY_RELEASE_HELD_ROUTE =
             "com.plwd.audiochannelguard.action.TRY_RELEASE_HELD_ROUTE"
 
@@ -32,22 +35,36 @@ class AudioGuardService : Service() {
             rebindListeners.remove(listener)
         }
 
-        fun start(context: Context) {
-            context.startForegroundService(
-                Intent(context, AudioGuardService::class.java)
-            )
+        fun start(context: Context): Boolean {
+            return startServiceSafely(context)
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, AudioGuardService::class.java))
         }
 
-        fun requestReleaseHeldRoute(context: Context) {
-            context.startForegroundService(
-                Intent(context, AudioGuardService::class.java).apply {
-                    action = ACTION_TRY_RELEASE_HELD_ROUTE
-                }
-            )
+        fun requestReleaseHeldRoute(context: Context): Boolean {
+            return startServiceSafely(context, ACTION_TRY_RELEASE_HELD_ROUTE)
+        }
+
+        private fun startServiceSafely(context: Context, action: String? = null): Boolean {
+            val appContext = context.applicationContext
+            val intent = Intent(appContext, AudioGuardService::class.java).apply {
+                this.action = action
+            }
+            return try {
+                appContext.startForegroundService(intent)
+                true
+            } catch (exception: ForegroundServiceStartNotAllowedException) {
+                Log.w(TAG, "Foreground service start not allowed: action=$action", exception)
+                false
+            } catch (exception: IllegalStateException) {
+                Log.w(TAG, "Foreground service start failed: action=$action", exception)
+                false
+            } catch (exception: SecurityException) {
+                Log.w(TAG, "Foreground service start blocked by security policy: action=$action", exception)
+                false
+            }
         }
     }
 
