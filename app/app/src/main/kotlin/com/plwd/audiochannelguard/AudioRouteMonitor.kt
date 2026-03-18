@@ -40,19 +40,6 @@ class AudioRouteMonitor(private val context: Context) {
         RELEASE_PROBE,
     }
 
-    private enum class HeldRouteKind {
-        CLASSIC_BLUETOOTH,
-        HEADSET,
-    }
-
-    private data class HeldRouteState(
-        val active: Boolean = false,
-        val manualReleaseInProgress: Boolean = false,
-        val headsetKey: String? = null,
-        val kind: HeldRouteKind? = null,
-        val message: String? = null,
-    )
-
     private data class ClassicBluetoothConfirmState(
         val headset: AudioDeviceInfo? = null,
         val reason: String? = null,
@@ -1399,13 +1386,12 @@ class AudioRouteMonitor(private val context: Context) {
             }
 
             val kind = heldRouteKindFor(headset)
-            heldRouteState = HeldRouteState(
-                active = true,
-                manualReleaseInProgress = true,
-                headsetKey = deviceIdentityKey(headset),
-                kind = kind,
-                message = "正在尝试归还${heldRouteSubject(kind)}控制权",
-            )
+            heldRouteState =
+                HeldRouteStateReducer.startManualRelease(
+                    headsetKey = deviceIdentityKey(headset),
+                    kind = kind,
+                    message = "正在尝试归还${heldRouteSubject(kind)}控制权",
+                )
             notifyCurrentStatusChanged()
             startReleaseProbe(headset, "$trigger，尝试归还${heldRouteSubject(kind)}控制权")
             true
@@ -1593,13 +1579,7 @@ class AudioRouteMonitor(private val context: Context) {
         val kind = heldRouteKindFor(headset)
         val headsetKey = deviceIdentityKey(headset)
         val message = heldRouteIdleMessage(kind)
-        val nextState = HeldRouteState(
-            active = true,
-            manualReleaseInProgress = false,
-            headsetKey = headsetKey,
-            kind = kind,
-            message = message,
-        )
+        val nextState = HeldRouteStateReducer.enter(headsetKey, kind, message)
         val changed = heldRouteState != nextState
 
         heldRouteState = nextState
@@ -1618,13 +1598,7 @@ class AudioRouteMonitor(private val context: Context) {
         val kind = heldRouteKindFor(headset)
         val headsetKey = deviceIdentityKey(headset)
         val message = heldRouteRetryMessage(kind, heldRouteState.manualReleaseInProgress)
-        val nextState = HeldRouteState(
-            active = true,
-            manualReleaseInProgress = false,
-            headsetKey = headsetKey,
-            kind = kind,
-            message = message,
-        )
+        val nextState = HeldRouteStateReducer.reclaim(headsetKey, kind, message)
         val changed = heldRouteState != nextState
 
         heldRouteState = nextState
@@ -1640,7 +1614,7 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun clearHeldRouteState() {
-        val clearedState = HeldRouteState()
+        val clearedState = HeldRouteStateReducer.clear()
         val changed = heldRouteState != clearedState
 
         heldRouteState = clearedState
@@ -2246,11 +2220,13 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun syncHeldRouteTracking(headset: AudioDeviceInfo) {
-        if (!hasActiveHeldRoute(headset) && !heldRouteState.manualReleaseInProgress) return
-        heldRouteState = heldRouteState.copy(
-            headsetKey = deviceIdentityKey(headset),
-            kind = heldRouteKindFor(headset),
-        )
+        heldRouteState =
+            HeldRouteStateReducer.syncTracking(
+                currentState = heldRouteState,
+                shouldTrack = hasActiveHeldRoute(headset) || heldRouteState.manualReleaseInProgress,
+                headsetKey = deviceIdentityKey(headset),
+                kind = heldRouteKindFor(headset),
+            )
     }
 
     private fun currentStableRouteStatus(headset: AudioDeviceInfo? = findConnectedHeadset()): GuardStatus {
@@ -2281,17 +2257,18 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun currentHeldRouteMessage(headset: AudioDeviceInfo? = findConnectedHeadset()): String? {
-        return if (heldRouteState.manualReleaseInProgress || hasActiveHeldRoute(headset)) {
-            heldRouteState.message
-        } else {
-            null
-        }
+        return HeldRouteStateReducer.currentMessage(
+            state = heldRouteState,
+            hasActiveHeldRoute = hasActiveHeldRoute(headset),
+        )
     }
 
     private fun hasManualHeldRouteRelease(headset: AudioDeviceInfo? = findConnectedHeadset()): Boolean {
-        return headset != null &&
-            hasActiveHeldRoute(headset) &&
-            !heldRouteState.manualReleaseInProgress
+        return HeldRouteStateReducer.canManualRelease(
+            state = heldRouteState,
+            hasHeadset = headset != null,
+            hasActiveHeldRoute = hasActiveHeldRoute(headset),
+        )
     }
 
     private fun deviceIdentityKey(device: AudioDeviceInfo?): String? {
