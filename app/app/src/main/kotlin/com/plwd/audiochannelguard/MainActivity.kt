@@ -416,6 +416,7 @@ private fun AudioGuardScreen() {
                 monitor.addStatusListener(statusListener)
                 monitor.addFixLogListener(fixLogListener)
                 monitor.addEnhancedStateListener(enhancedStateListener)
+                refreshState()
             }
         }
         val monitor = AudioGuardService.getMonitor()
