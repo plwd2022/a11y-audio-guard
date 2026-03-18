@@ -120,7 +120,7 @@ adb shell CLASSPATH=/data/local/tmp/AudioTool.dex app_process / AudioTool clear
 ## 重要说明
 
 - 这是“通信路由纠偏”方案，不是官方 Accessibility 音量 API 的替代实现
-- 当前项目无自动化测试，主要依赖实机 + ADB 回归
+- 当前已补充部分行为单测，但设备路由行为仍主要依赖实机 + ADB 回归
 - UI 用户文案以中文为主
 
 ## 安全与签名
@@ -134,6 +134,7 @@ adb shell CLASSPATH=/data/local/tmp/AudioTool.dex app_process / AudioTool clear
 - `research-report.md`：完整技术分析与日志证据
 - `developer-message.md`：问题摘要版本
 - `project-overview.md`：项目核心说明文档
+- `monitor-state-machine.md`：`AudioRouteMonitor` 状态迁移参考
 - `AGENTS.md`：工程与开发约束
 
 ## License

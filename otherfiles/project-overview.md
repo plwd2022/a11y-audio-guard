@@ -162,7 +162,7 @@ adb logcat -s AudioRouteMonitor AudioGuardService ServiceGuard AudioFixTile
 
 ## 8. 已知边界
 
-- 无自动化测试，当前以 ADB + 实机场景回归为主
+- 已补充部分单元测试，但设备级路由行为仍以 ADB + 实机场景回归为主
 - 行为受 ROM 音频策略差异影响，需持续通过日志调参
 - 本项目是“通信路由纠偏方案”，不是官方 Accessibility 音量控制 API 替代
 
@@ -182,5 +182,6 @@ adb logcat -s AudioRouteMonitor AudioGuardService ServiceGuard AudioFixTile
 - `research-report.md`：问题与因果链完整分析
 - `developer-message.md`：问题摘要与对外沟通版本
 - `AudioTool.java`：设备侧 API 验证工具
+- `monitor-state-machine.md`：`AudioRouteMonitor` 状态与入口迁移参考
 - `AGENTS.md`：工程结构与开发约束
 - `plwd_cn.keystore说明.md`：签名使用说明
