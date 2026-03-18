@@ -77,6 +77,18 @@ class AudioDeviceIdentityResolverTest {
     }
 
     @Test
+    fun `physical device match returns false when both addresses are present but different even if names match`() {
+        val same = AudioDeviceIdentityResolver.isSamePhysicalDevice(
+            firstAddress = "AA:BB",
+            firstProductName = "Device A",
+            secondAddress = "CC:DD",
+            secondProductName = "Device A"
+        )
+
+        assertFalse(same)
+    }
+
+    @Test
     fun `physical device match returns false when both address and product name differ`() {
         val same = AudioDeviceIdentityResolver.isSamePhysicalDevice(
             firstAddress = "AA:BB",

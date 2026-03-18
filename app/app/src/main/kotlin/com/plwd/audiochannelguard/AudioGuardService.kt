@@ -195,22 +195,34 @@ class AudioGuardService : Service() {
             serviceRunning = true,
             input = publicProjectionInput,
         )
-        updatePersistentNotification(publicProjection)
+        updatePersistentNotification(
+            publicProjection = publicProjection,
+            showReleaseAction = publicProjectionInput.canManuallyReleaseHeldRoute,
+        )
         if (::alertController.isInitialized) {
             alertController.onStateChanged(notificationSnapshotInputs.alertSnapshot)
         }
         AudioFixTile.requestTileRefresh(this)
     }
 
-    private fun updatePersistentNotification(publicProjection: GuardPublicProjection) {
+    private fun updatePersistentNotification(
+        publicProjection: GuardPublicProjection,
+        showReleaseAction: Boolean,
+    ) {
         val nm = getSystemService(NotificationManager::class.java)
         nm.notify(
             PERSISTENT_NOTIFICATION_ID,
-            buildPersistentNotification(publicProjection.persistentNotificationText)
+            buildPersistentNotification(
+                text = publicProjection.persistentNotificationText,
+                showReleaseAction = showReleaseAction,
+            )
         )
     }
 
-    private fun buildPersistentNotification(text: String): Notification {
+    private fun buildPersistentNotification(
+        text: String,
+        showReleaseAction: Boolean = false,
+    ): Notification {
         val contentIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -226,7 +238,7 @@ class AudioGuardService : Service() {
             .setOnlyAlertOnce(true)
             .setOngoing(true)
 
-        if (::monitor.isInitialized && monitor.canManuallyReleaseHeldRoute()) {
+        if (showReleaseAction) {
             builder.addAction(
                 R.drawable.ic_headset,
                 "尝试解除外放占用",

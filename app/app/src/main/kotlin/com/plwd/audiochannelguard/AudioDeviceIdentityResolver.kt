@@ -31,6 +31,10 @@ internal object AudioDeviceIdentityResolver {
             return true
         }
 
+        if (normalizedFirstAddress.isNotEmpty() && normalizedSecondAddress.isNotEmpty()) {
+            return false
+        }
+
         return firstProductName == secondProductName
     }
 }
