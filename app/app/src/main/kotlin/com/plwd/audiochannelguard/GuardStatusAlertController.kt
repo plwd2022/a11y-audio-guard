@@ -20,33 +20,16 @@ class GuardStatusAlertController(context: Context) {
         val canManuallyReleaseHeldRoute: Boolean,
     )
 
-    private enum class AlertKind {
-        RECOVERING,
-        FIXED,
-        HELD_ROUTE,
-        HEADSET_DISCONNECTED,
-    }
-
-    private data class AlertSpec(
-        val kind: AlertKind,
-        val key: String,
-        val text: String,
-        val timeoutMs: Long,
-        val cooldownMs: Long,
-        val delayMs: Long = 0L,
-        val showReleaseAction: Boolean = false,
-    )
-
     private val appContext = context.applicationContext
     private val notificationManager = appContext.getSystemService(NotificationManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
 
     private var initialized = false
     private var lastHadHeadset = false
-    private var activeSpec: AlertSpec? = null
+    private var activeSpec: GuardAlertSpec? = null
     private var lastPostedKey: String? = null
     private var lastPostedAtElapsedMs = 0L
-    private var pendingSpec: AlertSpec? = null
+    private var pendingSpec: GuardAlertSpec? = null
     private var pendingShowRunnable: Runnable? = null
     private var pendingClearRunnable: Runnable? = null
 
@@ -60,10 +43,11 @@ class GuardStatusAlertController(context: Context) {
             return
         }
 
-        val spec = buildAlertSpec(snapshot, hadHeadsetBefore)
+        val input = snapshot.toDecisionInput(hadHeadsetBefore)
+        val spec = GuardAlertResolver.resolveSpec(input)
         if (spec == null) {
             cancelPendingShow()
-            clearIfNoLongerRelevant(snapshot)
+            clearIfNoLongerRelevant(input)
             return
         }
 
@@ -106,63 +90,7 @@ class GuardStatusAlertController(context: Context) {
         return persistentChannel.importance == NotificationManager.IMPORTANCE_NONE
     }
 
-    private fun buildAlertSpec(snapshot: Snapshot, hadHeadsetBefore: Boolean): AlertSpec? {
-        snapshot.heldRouteMessage?.let { message ->
-            return AlertSpec(
-                kind = AlertKind.HELD_ROUTE,
-                key = "held:$message:${snapshot.canManuallyReleaseHeldRoute}",
-                text = message,
-                timeoutMs = 20_000L,
-                cooldownMs = 10_000L,
-                showReleaseAction = snapshot.canManuallyReleaseHeldRoute,
-            )
-        }
-
-        return when (snapshot.status) {
-            GuardStatus.FIXED -> AlertSpec(
-                kind = AlertKind.FIXED,
-                key = "fixed:${snapshot.headsetName.orEmpty()}",
-                text = "已将读屏声音收回到 ${snapshot.headsetName ?: "耳机"}",
-                timeoutMs = 6_000L,
-                cooldownMs = 15_000L,
-            )
-
-            GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> AlertSpec(
-                kind = AlertKind.FIXED,
-                key = "fixed_speaker:${snapshot.headsetName.orEmpty()}",
-                text = "已收回到 ${snapshot.headsetName ?: "耳机"}，如当前正常请忽略",
-                timeoutMs = 8_000L,
-                cooldownMs = 15_000L,
-            )
-
-            GuardStatus.HIJACKED -> AlertSpec(
-                kind = AlertKind.RECOVERING,
-                key = "hijacked:${snapshot.headsetName.orEmpty()}",
-                text = "检测到读屏声音可能外放，正在尝试恢复",
-                timeoutMs = 15_000L,
-                cooldownMs = 10_000L,
-                delayMs = 1_200L,
-            )
-
-            GuardStatus.NO_HEADSET -> {
-                if (!hadHeadsetBefore) {
-                    null
-                } else {
-                    AlertSpec(
-                        kind = AlertKind.HEADSET_DISCONNECTED,
-                        key = "disconnect",
-                        text = "耳机已断开，保护会在重新接入后恢复",
-                        timeoutMs = 5_000L,
-                        cooldownMs = 8_000L,
-                    )
-                }
-            }
-
-            GuardStatus.NORMAL -> null
-        }
-    }
-
-    private fun scheduleDelayed(spec: AlertSpec) {
+    private fun scheduleDelayed(spec: GuardAlertSpec) {
         if (pendingSpec == spec) return
 
         cancelPendingShow()
@@ -176,7 +104,7 @@ class GuardStatusAlertController(context: Context) {
         }.also { handler.postDelayed(it, spec.delayMs) }
     }
 
-    private fun showNow(spec: AlertSpec) {
+    private fun showNow(spec: GuardAlertSpec) {
         val now = SystemClock.elapsedRealtime()
         if (spec.key == lastPostedKey && now - lastPostedAtElapsedMs < spec.cooldownMs) {
             return
@@ -192,7 +120,7 @@ class GuardStatusAlertController(context: Context) {
         scheduleClear(spec)
     }
 
-    private fun buildNotification(spec: AlertSpec): Notification {
+    private fun buildNotification(spec: GuardAlertSpec): Notification {
         val builder = NotificationCompat.Builder(appContext, AudioGuardService.ALERT_CHANNEL_ID)
             .setContentTitle(appContext.getString(R.string.app_name))
             .setContentText(spec.text)
@@ -228,7 +156,7 @@ class GuardStatusAlertController(context: Context) {
         )
     }
 
-    private fun scheduleClear(spec: AlertSpec) {
+    private fun scheduleClear(spec: GuardAlertSpec) {
         cancelPendingClear()
         pendingClearRunnable = Runnable {
             if (activeSpec?.key == spec.key) {
@@ -239,27 +167,9 @@ class GuardStatusAlertController(context: Context) {
         }.also { handler.postDelayed(it, spec.timeoutMs) }
     }
 
-    private fun clearIfNoLongerRelevant(snapshot: Snapshot) {
-        when (activeSpec?.kind) {
-            AlertKind.RECOVERING -> {
-                if (snapshot.status != GuardStatus.HIJACKED) {
-                    clear()
-                }
-            }
-
-            AlertKind.HELD_ROUTE -> {
-                if (snapshot.heldRouteMessage == null) {
-                    clear()
-                }
-            }
-
-            AlertKind.HEADSET_DISCONNECTED -> {
-                if (snapshot.hasHeadset) {
-                    clear()
-                }
-            }
-
-            AlertKind.FIXED, null -> Unit
+    private fun clearIfNoLongerRelevant(input: GuardAlertDecisionInput) {
+        if (GuardAlertResolver.shouldClearActiveAlert(activeSpec?.kind, input)) {
+            clear()
         }
     }
 
@@ -272,5 +182,16 @@ class GuardStatusAlertController(context: Context) {
     private fun cancelPendingClear() {
         pendingClearRunnable?.let(handler::removeCallbacks)
         pendingClearRunnable = null
+    }
+
+    private fun Snapshot.toDecisionInput(hadHeadsetBefore: Boolean): GuardAlertDecisionInput {
+        return GuardAlertDecisionInput(
+            status = status,
+            headsetName = headsetName,
+            hasHeadset = hasHeadset,
+            heldRouteMessage = heldRouteMessage,
+            canManuallyReleaseHeldRoute = canManuallyReleaseHeldRoute,
+            hadHeadsetBefore = hadHeadsetBefore,
+        )
     }
 }
