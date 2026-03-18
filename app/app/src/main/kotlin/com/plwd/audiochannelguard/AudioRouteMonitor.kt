@@ -1779,10 +1779,12 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun isSamePhysicalDevice(first: AudioDeviceInfo, second: AudioDeviceInfo): Boolean {
-        val firstAddress = first.address.orEmpty()
-        val secondAddress = second.address.orEmpty()
-        if (firstAddress.isNotEmpty() && firstAddress == secondAddress) return true
-        return first.productName?.toString() == second.productName?.toString()
+        return AudioDeviceIdentityResolver.isSamePhysicalDevice(
+            firstAddress = first.address,
+            firstProductName = first.productName?.toString(),
+            secondAddress = second.address,
+            secondProductName = second.productName?.toString(),
+        )
     }
 
     private fun setCommunicationDeviceSafely(device: AudioDeviceInfo): Boolean {
@@ -2273,15 +2275,11 @@ class AudioRouteMonitor(private val context: Context) {
 
     private fun deviceIdentityKey(device: AudioDeviceInfo?): String? {
         if (device == null) return null
-        val address = device.address.orEmpty()
-        if (address.isNotEmpty()) {
-            return "${device.type}:$address"
-        }
-        val productName = device.productName?.toString().orEmpty()
-        if (productName.isNotEmpty()) {
-            return "${device.type}:$productName"
-        }
-        return device.type.toString()
+        return AudioDeviceIdentityResolver.identityKey(
+            type = device.type,
+            address = device.address,
+            productName = device.productName?.toString(),
+        )
     }
 
     private fun currentFixEventSnapshot(headset: AudioDeviceInfo? = findConnectedHeadset()): FixEventSnapshot {
