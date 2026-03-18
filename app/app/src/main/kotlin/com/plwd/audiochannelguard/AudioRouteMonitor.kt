@@ -748,50 +748,64 @@ class AudioRouteMonitor(private val context: Context) {
         if (pollingMode != PollingMode.CLEAR_PROBE) return
 
         val headset = clearProbeHeadset ?: findConnectedHeadset()
-        if (headset == null) {
-            stopClearProbe("观察期间未检测到耳机")
-            if (enhancedModeEnabled) {
-                updateEnhancedState(EnhancedState.WAITING_HEADSET)
-            }
-            reportStatus(GuardStatus.NO_HEADSET)
-            return
-        }
-
         val commDevice = audioManager.communicationDevice
-        val communicationHeadset = findAvailableCommunicationHeadset(headset)
+        val communicationHeadset = headset?.let { findAvailableCommunicationHeadset(it) }
         val restoredNaturally =
             commDevice != null && communicationHeadset != null && isSamePhysicalDevice(commDevice, communicationHeadset)
-
-        if (restoredNaturally) {
-            stopClearProbe("系统已自动恢复到耳机")
-            updateEnhancedState(EnhancedState.ACTIVE)
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
-
-        if (commDevice?.type in BUILTIN_TYPES) {
-            rememberBuiltinRouteEvidence(commDevice?.type)
-            stopClearProbe("释放后仍停留在${builtinDeviceName(commDevice?.type)}")
-            tryEnterCommunicationMode("增强守护重新申请通信模式")
-            val fixed = restoreCommunicationToHeadset(
-                preferredOutputDevice = headset,
-                reason = "释放后仍被劫持到${builtinDeviceName(commDevice?.type)}，强制恢复到耳机"
-            )
-            updateEnhancedState(EnhancedState.ACTIVE)
-            if (fixed) {
-                startRecoveryWindow("增强守护强制接管后观察稳定性")
+        when (
+            ClearProbeResolver.resolve(
+                ClearProbeDecisionInput(
+                    hasHeadset = headset != null,
+                    restoredNaturally = restoredNaturally,
+                    communicationDeviceKind = communicationDeviceKind(commDevice),
+                    timedOut = System.currentTimeMillis() >= clearProbeDeadlineMs,
+                )
+            ).outcome
+        ) {
+            ClearProbeOutcome.STOP_NO_HEADSET -> {
+                stopClearProbe("观察期间未检测到耳机")
+                if (enhancedModeEnabled) {
+                    updateEnhancedState(EnhancedState.WAITING_HEADSET)
+                }
+                reportStatus(GuardStatus.NO_HEADSET)
+                return
             }
-            return
-        }
 
-        if (System.currentTimeMillis() >= clearProbeDeadlineMs) {
-            stopClearProbe("观察窗口结束")
-            updateEnhancedState(EnhancedState.ACTIVE)
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
+            ClearProbeOutcome.FINISH_RESTORED_NATURALLY -> {
+                stopClearProbe("系统已自动恢复到耳机")
+                updateEnhancedState(EnhancedState.ACTIVE)
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
 
-        handler.postDelayed(pollingRunnable, CLEAR_PROBE_POLL_MS)
+            ClearProbeOutcome.FORCE_RESTORE_BUILTIN_ROUTE -> {
+                val availableHeadset = headset ?: return
+                rememberBuiltinRouteEvidence(commDevice?.type)
+                stopClearProbe("释放后仍停留在${builtinDeviceName(commDevice?.type)}")
+                tryEnterCommunicationMode("增强守护重新申请通信模式")
+                val fixed = restoreCommunicationToHeadset(
+                    preferredOutputDevice = availableHeadset,
+                    reason = "释放后仍被劫持到${builtinDeviceName(commDevice?.type)}，强制恢复到耳机"
+                )
+                updateEnhancedState(EnhancedState.ACTIVE)
+                if (fixed) {
+                    startRecoveryWindow("增强守护强制接管后观察稳定性")
+                }
+                return
+            }
+
+            ClearProbeOutcome.FINISH_NORMAL -> {
+                stopClearProbe("观察窗口结束")
+                updateEnhancedState(EnhancedState.ACTIVE)
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ClearProbeOutcome.CONTINUE_POLLING -> {
+                handler.postDelayed(pollingRunnable, CLEAR_PROBE_POLL_MS)
+                return
+            }
+        }
     }
 
     private fun handleRecoveryWindowTick() {
