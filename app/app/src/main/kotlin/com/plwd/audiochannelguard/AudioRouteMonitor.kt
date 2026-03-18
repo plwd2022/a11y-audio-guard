@@ -447,6 +447,17 @@ class AudioRouteMonitor(private val context: Context) {
         }
     }
 
+    private fun classicBluetoothStartupObservationReason(
+        builtInDevice: AudioDeviceInfo,
+        routedDevice: AudioDeviceInfo?,
+    ): String {
+        return if (routedDevice != null && routedDevice.type !in BUILTIN_TYPES) {
+            "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察仍在 ${routedDevice.productName}，未确认持续劫持"
+        } else {
+            "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察尚未确认实际出声设备，未确认持续劫持"
+        }
+    }
+
     private fun maybeLogClassicBluetoothReleaseObservation(
         builtInDevice: AudioDeviceInfo,
         routedDevice: AudioDeviceInfo?,
@@ -586,36 +597,45 @@ class AudioRouteMonitor(private val context: Context) {
         if (!hasClassicBluetoothStartupObservation()) return
 
         val headset = classicBluetoothStartupObserveHeadset ?: findConnectedHeadset()
-        if (headset == null) {
-            stopClassicBluetoothStartupObservation("观察期间未检测到耳机")
-            reportStatus(GuardStatus.NO_HEADSET)
-            return
-        }
-
         val commDevice = audioManager.communicationDevice
-        if (commDevice?.type !in BUILTIN_TYPES) {
-            stopClassicBluetoothStartupObservation("启动阶段通信设备已恢复为非内建设备")
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
-
-        val builtInDevice = commDevice ?: return
         val routedDevice = classicBluetoothSoftGuard.getRoutedDevice()
-        if (routedDevice?.type in BUILTIN_TYPES) {
-            evaluateClassicBluetoothSoftGuardRoute("启动阶段保真观察窗口结束", routedDevice)
-            if (!hasClassicBluetoothStartupObservation()) {
+        val builtInDevice = commDevice?.takeIf { it.type in BUILTIN_TYPES }
+        when (
+            ClassicBluetoothStartupObserveResolver.resolve(
+                ClassicBluetoothStartupObserveDecisionInput(
+                    hasHeadset = headset != null,
+                    communicationDeviceKind = communicationDeviceKind(commDevice),
+                    routedDeviceKind = communicationDeviceKind(routedDevice),
+                )
+            ).outcome
+        ) {
+            ClassicBluetoothStartupObserveOutcome.STOP_NO_HEADSET -> {
+                stopClassicBluetoothStartupObservation("观察期间未检测到耳机")
+                reportStatus(GuardStatus.NO_HEADSET)
                 return
             }
+
+            ClassicBluetoothStartupObserveOutcome.STOP_ROUTE_RECOVERED -> {
+                stopClassicBluetoothStartupObservation("启动阶段通信设备已恢复为非内建设备")
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ClassicBluetoothStartupObserveOutcome.EVALUATE_SOFT_GUARD -> {
+                evaluateClassicBluetoothSoftGuardRoute("启动阶段保真观察窗口结束", routedDevice)
+                if (!hasClassicBluetoothStartupObservation()) {
+                    return
+                }
+            }
+
+            ClassicBluetoothStartupObserveOutcome.STOP_UNCONFIRMED -> {
+            }
         }
-        val reason = when {
-            routedDevice != null && isSamePhysicalDevice(routedDevice, headset) ->
-                "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察仍在 ${routedDevice.productName}，未确认持续劫持"
-            routedDevice != null && routedDevice.type !in BUILTIN_TYPES ->
-                "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察仍在 ${routedDevice.productName}，未确认持续劫持"
-            else ->
-                "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察尚未确认实际出声设备，未确认持续劫持"
-        }
-        stopClassicBluetoothStartupObservation(reason)
+
+        val availableBuiltInDevice = builtInDevice ?: return
+        stopClassicBluetoothStartupObservation(
+            classicBluetoothStartupObservationReason(availableBuiltInDevice, routedDevice)
+        )
         reportStatus(GuardStatus.NORMAL)
     }
 
