@@ -910,38 +910,52 @@ class AudioRouteMonitor(private val context: Context) {
         if (pollingMode != PollingMode.RELEASE_PROBE) return
 
         val headset = releaseProbeHeadset ?: findConnectedHeadset()
-        if (headset == null) {
-            stopReleaseProbe("归还观察期间未检测到耳机")
-            if (enhancedModeEnabled) {
-                updateEnhancedState(EnhancedState.WAITING_HEADSET)
-            }
-            reportStatus(GuardStatus.NO_HEADSET)
-            return
-        }
-
         val commDevice = audioManager.communicationDevice
-        if (commDevice?.type in BUILTIN_TYPES) {
-            val builtInDevice = commDevice ?: return
-            if (maybeContinueClassicBluetoothManualReleaseObservation(headset, builtInDevice)) {
+        when (
+            ReleaseProbeResolver.resolve(
+                ReleaseProbeDecisionInput(
+                    hasHeadset = headset != null,
+                    communicationDeviceKind = communicationDeviceKind(commDevice),
+                    timedOut = System.currentTimeMillis() >= releaseProbeDeadlineMs,
+                )
+            ).outcome
+        ) {
+            ReleaseProbeOutcome.STOP_NO_HEADSET -> {
+                stopReleaseProbe("归还观察期间未检测到耳机")
+                if (enhancedModeEnabled) {
+                    updateEnhancedState(EnhancedState.WAITING_HEADSET)
+                }
+                reportStatus(GuardStatus.NO_HEADSET)
                 return
             }
-            rememberBuiltinRouteEvidence(builtInDevice.type)
-            handleReleaseProbeBuiltinRouteDetected(headset, builtInDevice)
-            return
-        }
 
-        if (System.currentTimeMillis() >= releaseProbeDeadlineMs) {
-            clearBuiltinRouteEvidence()
-            stopReleaseProbe("归还系统后未再确认持续劫持")
-            clearHeldRouteState()
-            if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
-                updateEnhancedState(EnhancedState.ACTIVE)
+            ReleaseProbeOutcome.HANDLE_BUILTIN_ROUTE -> {
+                val availableHeadset = headset ?: return
+                val builtInDevice = commDevice ?: return
+                if (maybeContinueClassicBluetoothManualReleaseObservation(availableHeadset, builtInDevice)) {
+                    return
+                }
+                rememberBuiltinRouteEvidence(builtInDevice.type)
+                handleReleaseProbeBuiltinRouteDetected(availableHeadset, builtInDevice)
+                return
             }
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
 
-        handler.postDelayed(pollingRunnable, RELEASE_PROBE_POLL_MS)
+            ReleaseProbeOutcome.FINISH_NORMAL -> {
+                clearBuiltinRouteEvidence()
+                stopReleaseProbe("归还系统后未再确认持续劫持")
+                clearHeldRouteState()
+                if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                    updateEnhancedState(EnhancedState.ACTIVE)
+                }
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ReleaseProbeOutcome.CONTINUE_POLLING -> {
+                handler.postDelayed(pollingRunnable, RELEASE_PROBE_POLL_MS)
+                return
+            }
+        }
     }
 
     private fun startClearProbe(preferredHeadset: AudioDeviceInfo?, reason: String) {
