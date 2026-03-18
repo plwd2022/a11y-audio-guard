@@ -431,9 +431,13 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun shouldUsePassiveClassicBluetoothConfirmation(headset: AudioDeviceInfo): Boolean {
-        return !enhancedModeEnabled &&
-            !hasGuardCommunicationHold() &&
-            isClassicBluetoothOutputDevice(headset)
+        return ClassicBluetoothPassiveCandidateResolver.resolve(
+            ClassicBluetoothPassiveCandidateInput(
+                enhancedModeEnabled = enhancedModeEnabled,
+                hasGuardCommunicationHold = hasGuardCommunicationHold(),
+                isClassicBluetoothHeadset = isClassicBluetoothOutputDevice(headset),
+            )
+        ).outcome == ClassicBluetoothPassiveCandidateOutcome.ALLOWED
     }
 
     private fun maybeLogPassiveClassicBluetoothObservation(
