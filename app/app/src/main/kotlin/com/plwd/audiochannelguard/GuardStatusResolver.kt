@@ -1,6 +1,6 @@
 package com.plwd.audiochannelguard
 
-internal enum class RoutePollingPhase {
+enum class RoutePollingPhase {
     IDLE,
     CLASSIC_BLUETOOTH_CONFIRM,
     CLEAR_PROBE,
@@ -8,7 +8,7 @@ internal enum class RoutePollingPhase {
     RELEASE_PROBE,
 }
 
-internal enum class CommunicationDeviceKind {
+enum class CommunicationDeviceKind {
     NONE,
     BUILTIN,
     EXTERNAL,
