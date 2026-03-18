@@ -1960,50 +1960,65 @@ class AudioRouteMonitor(private val context: Context) {
         reason: String,
         routedDevice: AudioDeviceInfo? = classicBluetoothSoftGuard.getRoutedDevice(),
     ) {
-        if (
-            !running ||
-            !classicBluetoothSoftGuardEnabled ||
-            !classicBluetoothSoftGuard.isRunning() ||
-            pollingMode != PollingMode.IDLE ||
-            hasGuardCommunicationHold() ||
-            shouldSuspendForCall(audioManager.mode)
-        ) {
-            return
-        }
-
-        val headset = findConnectedHeadset() ?: return
-        if (!isClassicBluetoothOutputDevice(headset)) return
-
-        val currentRoutedDevice = routedDevice ?: return
-        if (currentRoutedDevice.type !in BUILTIN_TYPES) return
-
         val now = SystemClock.elapsedRealtime()
-        if (!hasRecentBuiltinRouteEvidence(now)) {
-            maybeLogSoftGuardPassiveSkip(headset, currentRoutedDevice, now)
-            return
+        val headset = findConnectedHeadset()
+        val currentRoutedDevice = routedDevice
+        when (
+            ClassicBluetoothSoftGuardResolver.resolve(
+                ClassicBluetoothSoftGuardDecisionInput(
+                    monitorRunning = running,
+                    softGuardEnabled = classicBluetoothSoftGuardEnabled,
+                    softGuardRunning = classicBluetoothSoftGuard.isRunning(),
+                    pollingPhase = pollingMode.toRoutePollingPhase(),
+                    hasGuardCommunicationHold = hasGuardCommunicationHold(),
+                    suspendedByCall = shouldSuspendForCall(audioManager.mode),
+                    hasHeadset = headset != null,
+                    isClassicBluetoothHeadset =
+                        headset?.let { isClassicBluetoothOutputDevice(it) } ?: false,
+                    routedDeviceKind = communicationDeviceKind(currentRoutedDevice),
+                    hasRecentBuiltinRouteEvidence = hasRecentBuiltinRouteEvidence(now),
+                    hasWaitedForVerifyDelay =
+                        now - classicBluetoothSoftGuardStartedAtElapsedMs >= SOFT_GUARD_VERIFY_DELAY_MS,
+                    isEscalationCooldownElapsed =
+                        now - lastSoftGuardEscalationAtElapsedMs >= SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS,
+                )
+            ).outcome
+        ) {
+            ClassicBluetoothSoftGuardOutcome.IGNORE -> return
+
+            ClassicBluetoothSoftGuardOutcome.PASSIVE_SKIP -> {
+                val availableHeadset = headset ?: return
+                val builtInRoutedDevice = currentRoutedDevice ?: return
+                maybeLogSoftGuardPassiveSkip(availableHeadset, builtInRoutedDevice, now)
+                return
+            }
+
+            ClassicBluetoothSoftGuardOutcome.WAIT_FOR_VERIFY_DELAY -> {
+                handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
+                handler.postDelayed(
+                    classicBluetoothSoftGuardVerificationRunnable,
+                    SOFT_GUARD_VERIFY_DELAY_MS
+                )
+                return
+            }
+
+            ClassicBluetoothSoftGuardOutcome.WAIT_FOR_ESCALATION_COOLDOWN -> return
+
+            ClassicBluetoothSoftGuardOutcome.ESCALATE -> {
+                lastSoftGuardEscalationAtElapsedMs = now
+            }
         }
 
-        if (now - classicBluetoothSoftGuardStartedAtElapsedMs < SOFT_GUARD_VERIFY_DELAY_MS) {
-            handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
-            handler.postDelayed(
-                classicBluetoothSoftGuardVerificationRunnable,
-                SOFT_GUARD_VERIFY_DELAY_MS
-            )
-            return
-        }
-
-        if (now - lastSoftGuardEscalationAtElapsedMs < SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS) {
-            return
-        }
-        lastSoftGuardEscalationAtElapsedMs = now
+        val availableHeadset = headset ?: return
+        val builtInRoutedDevice = currentRoutedDevice ?: return
 
         stopClassicBluetoothStartupObservation(
-            "保真守护已确认实际出声落到${builtinDeviceName(currentRoutedDevice.type)}",
+            "保真守护已确认实际出声落到${builtinDeviceName(builtInRoutedDevice.type)}",
             announce = false,
             clearEvidence = false
         )
         addLog(
-            "$reason，已升级为强制恢复: ${headset.productName}",
+            "$reason，已升级为强制恢复: ${availableHeadset.productName}",
             code = FixEventCode.SOFT_GUARD_ESCALATED,
             level = FixEventLevel.WARNING,
         )
@@ -2012,7 +2027,7 @@ class AudioRouteMonitor(private val context: Context) {
             updateEnhancedState(EnhancedState.ACTIVE)
         }
         val fixed = restoreCommunicationToHeadset(
-            preferredOutputDevice = headset,
+            preferredOutputDevice = availableHeadset,
             reason = "经典蓝牙保真守护未能维持耳机路由，强制恢复到耳机"
         )
         if (fixed) {
