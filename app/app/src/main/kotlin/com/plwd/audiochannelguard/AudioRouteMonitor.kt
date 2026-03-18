@@ -1180,28 +1180,20 @@ class AudioRouteMonitor(private val context: Context) {
     fun getStatus(): GuardStatus {
         return callOnMonitorThread(GuardStatus.NO_HEADSET) {
             val headset = findConnectedHeadset()
-            if (headset == null) return@callOnMonitorThread GuardStatus.NO_HEADSET
-            val commDevice = audioManager.communicationDevice
-            if (pollingMode == PollingMode.CLEAR_PROBE) {
-                GuardStatus.HIJACKED
-            } else if (commDevice?.type in BUILTIN_TYPES) {
-                if (
-                    shouldUsePassiveClassicBluetoothConfirmation(headset) &&
-                    (!hasRecentBuiltinRouteEvidence() || hasClassicBluetoothStartupObservation())
-                ) {
-                    GuardStatus.NORMAL
-                } else
-                if (lastReportedStatus == GuardStatus.FIXED && pollingMode == PollingMode.IDLE) {
-                    GuardStatus.FIXED_BUT_SPEAKER_ROUTE
-                } else {
-                    GuardStatus.HIJACKED
-                }
-            } else if (hasActiveHeldRoute(headset) && hasGuardCommunicationHold()) {
-                GuardStatus.FIXED
-            } else if (lastReportedStatus == GuardStatus.FIXED) {
-                GuardStatus.FIXED
-            } else
-                GuardStatus.NORMAL
+            GuardStatusResolver.resolve(
+                RouteSnapshot(
+                    hasHeadset = headset != null,
+                    communicationDeviceKind = communicationDeviceKind(audioManager.communicationDevice),
+                    pollingPhase = pollingMode.toRoutePollingPhase(),
+                    lastReportedStatus = lastReportedStatus,
+                    isClassicBluetoothPassiveCandidate =
+                        headset != null && shouldUsePassiveClassicBluetoothConfirmation(headset),
+                    hasRecentBuiltinRouteEvidence = hasRecentBuiltinRouteEvidence(),
+                    hasClassicBluetoothStartupObservation = hasClassicBluetoothStartupObservation(),
+                    hasActiveHeldRoute = headset != null && hasActiveHeldRoute(headset),
+                    hasGuardCommunicationHold = hasGuardCommunicationHold(),
+                )
+            )
         }
     }
 
@@ -1431,6 +1423,14 @@ class AudioRouteMonitor(private val context: Context) {
     private fun isClassicBluetoothOutputDevice(device: AudioDeviceInfo): Boolean {
         return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
             device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+    }
+
+    private fun communicationDeviceKind(device: AudioDeviceInfo?): CommunicationDeviceKind {
+        return when {
+            device == null -> CommunicationDeviceKind.NONE
+            device.type in BUILTIN_TYPES -> CommunicationDeviceKind.BUILTIN
+            else -> CommunicationDeviceKind.EXTERNAL
+        }
     }
 
     private fun handleReleaseProbeBuiltinRouteDetected(
@@ -1965,6 +1965,16 @@ class AudioRouteMonitor(private val context: Context) {
             task.get(2, TimeUnit.SECONDS)
         } catch (_: Exception) {
             defaultValue
+        }
+    }
+
+    private fun PollingMode.toRoutePollingPhase(): RoutePollingPhase {
+        return when (this) {
+            PollingMode.IDLE -> RoutePollingPhase.IDLE
+            PollingMode.CLASSIC_BLUETOOTH_CONFIRM -> RoutePollingPhase.CLASSIC_BLUETOOTH_CONFIRM
+            PollingMode.CLEAR_PROBE -> RoutePollingPhase.CLEAR_PROBE
+            PollingMode.RECOVERY_WINDOW -> RoutePollingPhase.RECOVERY_WINDOW
+            PollingMode.RELEASE_PROBE -> RoutePollingPhase.RELEASE_PROBE
         }
     }
 }
