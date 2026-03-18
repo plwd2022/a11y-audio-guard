@@ -427,35 +427,24 @@ class AudioRouteMonitor(private val context: Context) {
         )
     }
 
-    private fun maybeContinueClassicBluetoothPassiveConfirmation(
+    private fun isClassicBluetoothPassiveObservationActive(
         headset: AudioDeviceInfo,
-        builtInDevice: AudioDeviceInfo,
+        routedDevice: AudioDeviceInfo?,
     ): Boolean {
-        if (!classicBluetoothSoftGuardEnabled || !isClassicBluetoothOutputDevice(headset)) {
-            return false
-        }
+        return classicBluetoothSoftGuardEnabled &&
+            isClassicBluetoothOutputDevice(headset) &&
+            routedDevice?.type !in BUILTIN_TYPES
+    }
 
-        val routedDevice = classicBluetoothSoftGuard.getRoutedDevice()
-        if (routedDevice?.type in BUILTIN_TYPES) {
-            return false
-        }
-
-        val reason = if (routedDevice != null) {
+    private fun classicBluetoothPassiveObservationReason(
+        builtInDevice: AudioDeviceInfo,
+        routedDevice: AudioDeviceInfo?,
+    ): String {
+        return if (routedDevice != null) {
             "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察仍在 ${routedDevice.productName}"
         } else {
             "通信设备显示为${builtinDeviceName(builtInDevice.type)}，但保真观察尚未确认实际出声设备"
         }
-
-        if (SystemClock.elapsedRealtime() >= classicBluetoothConfirmDeadlineMs) {
-            clearBuiltinRouteEvidence()
-            stopClassicBluetoothConfirm("$reason，未确认持续劫持")
-            reportStatus(GuardStatus.NORMAL)
-            return true
-        }
-
-        maybeLogPassiveClassicBluetoothObservation(headset, reason)
-        handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
-        return true
     }
 
     private fun maybeLogClassicBluetoothReleaseObservation(
@@ -693,55 +682,96 @@ class AudioRouteMonitor(private val context: Context) {
         if (pollingMode != PollingMode.CLASSIC_BLUETOOTH_CONFIRM) return
 
         val headset = classicBluetoothConfirmHeadset ?: findConnectedHeadset()
-        if (headset == null) {
-            clearBuiltinRouteEvidence()
-            stopClassicBluetoothConfirm("观察期间未检测到耳机")
-            reportStatus(GuardStatus.NO_HEADSET)
-            return
-        }
-
-        if (!shouldUsePassiveClassicBluetoothConfirmation(headset)) {
-            stopClassicBluetoothConfirm("观察条件已变化", announce = false)
-            return
-        }
-
         val commDevice = audioManager.communicationDevice
-        if (commDevice?.type !in BUILTIN_TYPES) {
-            clearBuiltinRouteEvidence()
-            stopClassicBluetoothConfirm("观察期间未再检测到内建设备")
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
-
-        val builtInDevice = commDevice ?: return
-        if (maybeContinueClassicBluetoothPassiveConfirmation(headset, builtInDevice)) {
-            return
-        }
-        classicBluetoothConfirmBuiltInType = builtInDevice.type
-        classicBluetoothConfirmHitCount++
-        if (classicBluetoothConfirmHitCount >= CLASSIC_BLUETOOTH_CONFIRM_REQUIRED_HITS) {
-            stopClassicBluetoothConfirm("已确认持续劫持", announce = false)
-            val fixed = restoreCommunicationToHeadset(
-                preferredOutputDevice = headset,
-                reason = classicBluetoothConfirmReason
-                    ?: "经典蓝牙确认${builtinDeviceName(builtInDevice.type)}路由持续存在，尝试恢复声道"
+        val routedDevice = classicBluetoothSoftGuard.getRoutedDevice()
+        val builtInDevice = commDevice?.takeIf { it.type in BUILTIN_TYPES }
+        val decision = ClassicBluetoothConfirmResolver.resolve(
+            ClassicBluetoothConfirmDecisionInput(
+                hasHeadset = headset != null,
+                passiveConfirmationAllowed =
+                    headset?.let { shouldUsePassiveClassicBluetoothConfirmation(it) } ?: false,
+                communicationDeviceKind = communicationDeviceKind(commDevice),
+                softGuardObservationActive =
+                    headset != null && isClassicBluetoothPassiveObservationActive(headset, routedDevice),
+                timedOut = SystemClock.elapsedRealtime() >= classicBluetoothConfirmDeadlineMs,
+                confirmHitCount = classicBluetoothConfirmHitCount,
+                requiredHits = CLASSIC_BLUETOOTH_CONFIRM_REQUIRED_HITS,
             )
-            if (fixed) {
-                startRecoveryWindow("经典蓝牙确认劫持后恢复")
-            } else {
-                reportStatus(GuardStatus.HIJACKED)
+        )
+
+        classicBluetoothConfirmHitCount = decision.nextHitCount
+        when (decision.outcome) {
+            ClassicBluetoothConfirmOutcome.STOP_NO_HEADSET -> {
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("观察期间未检测到耳机")
+                reportStatus(GuardStatus.NO_HEADSET)
+                return
             }
-            return
-        }
 
-        if (SystemClock.elapsedRealtime() >= classicBluetoothConfirmDeadlineMs) {
-            clearBuiltinRouteEvidence()
-            stopClassicBluetoothConfirm("观察窗口结束，未确认持续劫持")
-            reportStatus(GuardStatus.NORMAL)
-            return
-        }
+            ClassicBluetoothConfirmOutcome.STOP_CONDITIONS_CHANGED -> {
+                stopClassicBluetoothConfirm("观察条件已变化", announce = false)
+                return
+            }
 
-        handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
+            ClassicBluetoothConfirmOutcome.STOP_ROUTE_RECOVERED -> {
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("观察期间未再检测到内建设备")
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ClassicBluetoothConfirmOutcome.STOP_SOFT_GUARD_TIMEOUT -> {
+                val availableBuiltInDevice = builtInDevice ?: return
+                val reason = classicBluetoothPassiveObservationReason(availableBuiltInDevice, routedDevice)
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("$reason，未确认持续劫持")
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ClassicBluetoothConfirmOutcome.CONTINUE_SOFT_GUARD_OBSERVATION -> {
+                val availableHeadset = headset ?: return
+                val availableBuiltInDevice = builtInDevice ?: return
+                maybeLogPassiveClassicBluetoothObservation(
+                    availableHeadset,
+                    classicBluetoothPassiveObservationReason(availableBuiltInDevice, routedDevice)
+                )
+                handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
+                return
+            }
+
+            ClassicBluetoothConfirmOutcome.CONFIRM_HIJACK -> {
+                val availableHeadset = headset ?: return
+                val availableBuiltInDevice = builtInDevice ?: return
+                classicBluetoothConfirmBuiltInType = availableBuiltInDevice.type
+                stopClassicBluetoothConfirm("已确认持续劫持", announce = false)
+                val fixed = restoreCommunicationToHeadset(
+                    preferredOutputDevice = availableHeadset,
+                    reason = classicBluetoothConfirmReason
+                        ?: "经典蓝牙确认${builtinDeviceName(availableBuiltInDevice.type)}路由持续存在，尝试恢复声道"
+                )
+                if (fixed) {
+                    startRecoveryWindow("经典蓝牙确认劫持后恢复")
+                } else {
+                    reportStatus(GuardStatus.HIJACKED)
+                }
+                return
+            }
+
+            ClassicBluetoothConfirmOutcome.STOP_TIMEOUT -> {
+                clearBuiltinRouteEvidence()
+                stopClassicBluetoothConfirm("观察窗口结束，未确认持续劫持")
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            ClassicBluetoothConfirmOutcome.CONTINUE_CONFIRMING -> {
+                val availableBuiltInDevice = builtInDevice ?: return
+                classicBluetoothConfirmBuiltInType = availableBuiltInDevice.type
+                handler.postDelayed(pollingRunnable, CLASSIC_BLUETOOTH_CONFIRM_POLL_MS)
+                return
+            }
+        }
     }
 
     private fun handleClearProbeTick() {
