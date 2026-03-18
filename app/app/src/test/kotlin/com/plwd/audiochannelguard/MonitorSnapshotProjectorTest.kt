@@ -62,6 +62,35 @@ class MonitorSnapshotProjectorTest {
     }
 
     @Test
+    fun `alert snapshot preserves headset presence and held route controls`() {
+        val alertSnapshot = MonitorSnapshotProjector.alertSnapshot(
+            snapshot(
+                hasHeadset = true,
+                headsetName = "USB耳机",
+                heldRouteMessage = "正在尝试归还耳机控制权",
+                canManuallyReleaseHeldRoute = true
+            )
+        )
+
+        assertEquals(GuardStatus.NORMAL, alertSnapshot.status)
+        assertEquals("USB耳机", alertSnapshot.headsetName)
+        assertTrue(alertSnapshot.hasHeadset)
+        assertEquals("正在尝试归还耳机控制权", alertSnapshot.heldRouteMessage)
+        assertTrue(alertSnapshot.canManuallyReleaseHeldRoute)
+    }
+
+    @Test
+    fun `notification snapshot inputs reuse the same status override for both projections`() {
+        val inputs = MonitorSnapshotProjector.notificationSnapshotInputs(
+            snapshot(hasHeadset = true),
+            statusOverride = GuardStatus.FIXED
+        )
+
+        assertEquals(GuardStatus.FIXED, inputs.publicProjectionInput.status)
+        assertEquals(GuardStatus.FIXED, inputs.alertSnapshot.status)
+    }
+
+    @Test
     fun `fix event snapshot derives resolved status and effective enhanced state`() {
         val fixSnapshot = MonitorSnapshotProjector.fixEventSnapshot(
             snapshot(

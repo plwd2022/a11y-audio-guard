@@ -189,14 +189,15 @@ class AudioGuardService : Service() {
     }
 
     private fun refreshNotifications(status: GuardStatus = monitor.getStatus()) {
-        val publicProjectionInput = monitor.getPublicProjectionInput(status)
+        val notificationSnapshotInputs = monitor.getNotificationSnapshotInputs(status)
+        val publicProjectionInput = notificationSnapshotInputs.publicProjectionInput
         val publicProjection = GuardPublicProjectionResolver.resolve(
             serviceRunning = true,
             input = publicProjectionInput,
         )
         updatePersistentNotification(publicProjection)
         if (::alertController.isInitialized) {
-            alertController.onStateChanged(buildAlertSnapshot(publicProjectionInput))
+            alertController.onStateChanged(notificationSnapshotInputs.alertSnapshot)
         }
         AudioFixTile.requestTileRefresh(this)
     }
@@ -206,18 +207,6 @@ class AudioGuardService : Service() {
         nm.notify(
             PERSISTENT_NOTIFICATION_ID,
             buildPersistentNotification(publicProjection.persistentNotificationText)
-        )
-    }
-
-    private fun buildAlertSnapshot(
-        publicProjectionInput: GuardPublicProjectionInput,
-    ): GuardStatusAlertController.Snapshot {
-        return GuardStatusAlertController.Snapshot(
-            status = publicProjectionInput.status,
-            headsetName = publicProjectionInput.headsetName,
-            hasHeadset = publicProjectionInput.headsetName != null,
-            heldRouteMessage = publicProjectionInput.heldRouteMessage,
-            canManuallyReleaseHeldRoute = publicProjectionInput.canManuallyReleaseHeldRoute,
         )
     }
 

@@ -1372,6 +1372,38 @@ class AudioRouteMonitor(private val context: Context) {
         }
     }
 
+    internal fun getNotificationSnapshotInputs(
+        statusOverride: GuardStatus? = null,
+    ): NotificationSnapshotInputs {
+        return callOnMonitorThread(
+            NotificationSnapshotInputs(
+                publicProjectionInput =
+                    GuardPublicProjectionInput(
+                        status = GuardStatus.NO_HEADSET,
+                        enhancedState = EnhancedState.DISABLED,
+                        enhancedModeEnabled = false,
+                        headsetName = null,
+                        heldRouteMessage = null,
+                        canManuallyReleaseHeldRoute = false,
+                    ),
+                alertSnapshot =
+                    GuardStatusAlertController.Snapshot(
+                        status = GuardStatus.NO_HEADSET,
+                        headsetName = null,
+                        hasHeadset = false,
+                        heldRouteMessage = null,
+                        canManuallyReleaseHeldRoute = false,
+                    ),
+            )
+        ) {
+            val headset = findConnectedHeadset()
+            MonitorSnapshotProjector.notificationSnapshotInputs(
+                snapshot = buildMonitorSnapshot(headset),
+                statusOverride = statusOverride,
+            )
+        }
+    }
+
     fun tryManualReleaseHeldRoute(trigger: String): Boolean {
         return callOnMonitorThread(false) {
             if (!running || !hasGuardCommunicationHold()) return@callOnMonitorThread false

@@ -19,6 +19,11 @@ internal data class MonitorSnapshot(
     val heldRouteManualReleaseInProgress: Boolean,
 )
 
+internal data class NotificationSnapshotInputs(
+    val publicProjectionInput: GuardPublicProjectionInput,
+    val alertSnapshot: GuardStatusAlertController.Snapshot,
+)
+
 internal object MonitorSnapshotProjector {
     fun routeSnapshot(snapshot: MonitorSnapshot): RouteSnapshot {
         return RouteSnapshot(
@@ -49,6 +54,29 @@ internal object MonitorSnapshotProjector {
             headsetName = snapshot.headsetName,
             heldRouteMessage = snapshot.heldRouteMessage,
             canManuallyReleaseHeldRoute = snapshot.canManuallyReleaseHeldRoute,
+        )
+    }
+
+    fun alertSnapshot(
+        snapshot: MonitorSnapshot,
+        statusOverride: GuardStatus? = null,
+    ): GuardStatusAlertController.Snapshot {
+        return GuardStatusAlertController.Snapshot(
+            status = statusOverride ?: resolvedStatus(snapshot),
+            headsetName = snapshot.headsetName,
+            hasHeadset = snapshot.hasHeadset,
+            heldRouteMessage = snapshot.heldRouteMessage,
+            canManuallyReleaseHeldRoute = snapshot.canManuallyReleaseHeldRoute,
+        )
+    }
+
+    fun notificationSnapshotInputs(
+        snapshot: MonitorSnapshot,
+        statusOverride: GuardStatus? = null,
+    ): NotificationSnapshotInputs {
+        return NotificationSnapshotInputs(
+            publicProjectionInput = publicProjectionInput(snapshot, statusOverride),
+            alertSnapshot = alertSnapshot(snapshot, statusOverride),
         )
     }
 
