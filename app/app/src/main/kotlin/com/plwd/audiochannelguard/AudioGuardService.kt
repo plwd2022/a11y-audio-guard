@@ -189,63 +189,35 @@ class AudioGuardService : Service() {
     }
 
     private fun refreshNotifications(status: GuardStatus = monitor.getStatus()) {
-        updatePersistentNotification(status)
+        val publicProjectionInput = monitor.getPublicProjectionInput(status)
+        val publicProjection = GuardPublicProjectionResolver.resolve(
+            serviceRunning = true,
+            input = publicProjectionInput,
+        )
+        updatePersistentNotification(publicProjection)
         if (::alertController.isInitialized) {
-            alertController.onStateChanged(buildAlertSnapshot(status))
+            alertController.onStateChanged(buildAlertSnapshot(publicProjectionInput))
         }
         AudioFixTile.requestTileRefresh(this)
     }
 
-    private fun updatePersistentNotification(status: GuardStatus) {
-        val heldRouteMessage = monitor.getHeldRouteMessage()
-        val text = when {
-            heldRouteMessage != null -> heldRouteMessage
-            else -> when (monitor.getEnhancedState()) {
-            EnhancedState.CLEAR_PROBE -> "增强保护观察中"
-            EnhancedState.SUSPENDED_BY_CALL -> "增强保护已暂停（通话中）"
-            EnhancedState.WAITING_HEADSET ->
-                if (monitor.isEnhancedModeEnabled()) "增强保护等待耳机" else defaultStatusText(status)
-
-            EnhancedState.ACTIVE -> {
-                if (status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE) {
-                    val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
-                    "增强保护中，已收回到 $deviceName"
-                } else {
-                    "增强保护中"
-                }
-            }
-
-            EnhancedState.DISABLED -> defaultStatusText(status)
-        }
-        }
+    private fun updatePersistentNotification(publicProjection: GuardPublicProjection) {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(PERSISTENT_NOTIFICATION_ID, buildPersistentNotification(text))
+        nm.notify(
+            PERSISTENT_NOTIFICATION_ID,
+            buildPersistentNotification(publicProjection.persistentNotificationText)
+        )
     }
 
-    private fun defaultStatusText(status: GuardStatus): String {
-        return when (status) {
-            GuardStatus.NORMAL -> "正在保护读屏声音"
-            GuardStatus.FIXED -> {
-                val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
-                "已将读屏声音收回到 $deviceName"
-            }
-            GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> {
-                val deviceName = monitor.findConnectedHeadset()?.productName ?: "耳机"
-                "已收回到 $deviceName，如当前正常请忽略"
-            }
-            GuardStatus.HIJACKED -> "检测到读屏声音可能外放"
-            GuardStatus.NO_HEADSET -> "未检测到耳机"
-        }
-    }
-
-    private fun buildAlertSnapshot(status: GuardStatus): GuardStatusAlertController.Snapshot {
-        val headsetName = monitor.findConnectedHeadset()?.productName?.toString()
+    private fun buildAlertSnapshot(
+        publicProjectionInput: GuardPublicProjectionInput,
+    ): GuardStatusAlertController.Snapshot {
         return GuardStatusAlertController.Snapshot(
-            status = status,
-            headsetName = headsetName,
-            hasHeadset = headsetName != null,
-            heldRouteMessage = monitor.getHeldRouteMessage(),
-            canManuallyReleaseHeldRoute = monitor.canManuallyReleaseHeldRoute(),
+            status = publicProjectionInput.status,
+            headsetName = publicProjectionInput.headsetName,
+            hasHeadset = publicProjectionInput.headsetName != null,
+            heldRouteMessage = publicProjectionInput.heldRouteMessage,
+            canManuallyReleaseHeldRoute = publicProjectionInput.canManuallyReleaseHeldRoute,
         )
     }
 

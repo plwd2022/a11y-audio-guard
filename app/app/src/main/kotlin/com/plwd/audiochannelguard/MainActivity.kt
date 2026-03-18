@@ -100,7 +100,9 @@ private fun AudioGuardScreen() {
     val scope = rememberCoroutineScope()
 
     var serviceRunning by remember { mutableStateOf(AudioGuardService.isRunning()) }
-    var status by remember { mutableStateOf(GuardStatus.NO_HEADSET) }
+    var publicProjectionInput by remember {
+        mutableStateOf(defaultGuardPublicProjectionInput(AudioGuardApp.isEnhancedModeEnabled(context)))
+    }
     var fixLog by remember { mutableStateOf<List<FixEvent>>(emptyList()) }
     var enhancedEnabled by remember { mutableStateOf(AudioGuardApp.isEnhancedModeEnabled(context)) }
     var classicBluetoothSoftGuardEnabled by remember {
@@ -109,13 +111,7 @@ private fun AudioGuardScreen() {
     var classicBluetoothWidebandEnabled by remember {
         mutableStateOf(AudioGuardApp.isClassicBluetoothWidebandEnabled(context))
     }
-    var enhancedStateText by remember {
-        mutableStateOf(if (enhancedEnabled) "待启动" else "已关闭")
-    }
     var commDeviceName by remember { mutableStateOf("无") }
-    var headsetName by remember { mutableStateOf("无") }
-    var heldRouteMessage by remember { mutableStateOf<String?>(null) }
-    var canManualReleaseHeldRoute by remember { mutableStateOf(false) }
     var notificationsEnabled by remember { mutableStateOf(AudioGuardService.areNotificationsEnabled(context)) }
     var persistentChannelBlocked by remember {
         mutableStateOf(AudioGuardService.isPersistentChannelBlocked(context))
@@ -165,21 +161,13 @@ private fun AudioGuardScreen() {
             AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
-            status = monitor.getStatus()
+            publicProjectionInput = monitor.getPublicProjectionInput()
             fixLog = monitor.fixLog
-            enhancedStateText = enhancedStateToText(monitor.getEnhancedState())
             commDeviceName = monitor.getCommunicationDevice()?.productName?.toString() ?: "无"
-            headsetName = monitor.findConnectedHeadset()?.productName?.toString() ?: "未连接"
-            heldRouteMessage = monitor.getHeldRouteMessage()
-            canManualReleaseHeldRoute = monitor.canManuallyReleaseHeldRoute()
         } else {
-            status = GuardStatus.NO_HEADSET
+            publicProjectionInput = defaultGuardPublicProjectionInput(enhancedEnabled)
             fixLog = emptyList()
-            enhancedStateText = if (enhancedEnabled) "待启动" else "已关闭"
             commDeviceName = "无"
-            headsetName = "未连接"
-            heldRouteMessage = null
-            canManualReleaseHeldRoute = false
         }
     }
 
@@ -533,12 +521,19 @@ private fun AudioGuardScreen() {
             refreshState()
         }
     }
-    val statusTitle = guardStatusTitle(serviceRunning, status)
-    val statusSummary = guardStatusSummary(serviceRunning, status, headsetName)
-    val showQuickFixAction = serviceRunning &&
-        (status == GuardStatus.HIJACKED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE)
+    val publicProjection = GuardPublicProjectionResolver.resolve(
+        serviceRunning = serviceRunning,
+        input = publicProjectionInput
+    )
+    val statusTitle = publicProjection.statusTitle
+    val statusSummary = publicProjection.statusSummary
+    val showQuickFixAction = publicProjection.showQuickFixAction
     val showTilePrompt = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !tileAdded
-    val runtimeHintMessage = if (canManualReleaseHeldRoute) null else heldRouteMessage
+    val runtimeHintMessage = publicProjection.runtimeHintMessage
+    val headsetName = publicProjectionInput.headsetName ?: "未连接"
+    val enhancedStateText = enhancedStateToText(publicProjectionInput.enhancedState)
+    val heldRouteMessage = publicProjectionInput.heldRouteMessage
+    val canManualReleaseHeldRoute = publicProjectionInput.canManuallyReleaseHeldRoute
     val notificationSummary = guardNotificationSummary(
         notificationsEnabled = notificationsEnabled,
         persistentChannelBlocked = persistentChannelBlocked,
@@ -995,53 +990,6 @@ private fun SettingsToggleRow(
     }
 }
 
-private fun guardStatusTitle(serviceRunning: Boolean, status: GuardStatus): String {
-    return when {
-        !serviceRunning -> "保护已关闭"
-        status == GuardStatus.HIJACKED -> "检测到读屏声音可能外放"
-        status == GuardStatus.FIXED || status == GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已将读屏声音收回耳机"
-        status == GuardStatus.NO_HEADSET -> "当前未接入耳机"
-        else -> "读屏声音正在耳机中"
-    }
-}
-
-private fun guardStatusSummary(
-    serviceRunning: Boolean,
-    status: GuardStatus,
-    headsetName: String,
-): String {
-    if (!serviceRunning) {
-        return "开启后，如果读屏声音误外放，应用会自动把声音收回耳机。"
-    }
-
-    return when (status) {
-        GuardStatus.NORMAL -> {
-            if (headsetName != "无" && headsetName != "未连接") {
-                "当前读屏声音正在 $headsetName 中，可继续正常使用。"
-            } else {
-                "保护已开启，正在后台观察读屏声音是否误外放。"
-            }
-        }
-
-        GuardStatus.FIXED -> {
-            if (headsetName != "无" && headsetName != "未连接") {
-                "最近一次异常已经把读屏声音收回到 $headsetName。"
-            } else {
-                "最近一次异常已经把读屏声音收回耳机。"
-            }
-        }
-
-        GuardStatus.FIXED_BUT_SPEAKER_ROUTE ->
-            "读屏声音已经收回耳机，如当前听起来正常请忽略。"
-
-        GuardStatus.HIJACKED ->
-            "当前读屏声音可能仍在扬声器外放，如你现在确实听到外放，可立即修复。"
-
-        GuardStatus.NO_HEADSET ->
-            "接入耳机后会自动开始保护。"
-    }
-}
-
 private fun guardNotificationSummary(
     notificationsEnabled: Boolean,
     persistentChannelBlocked: Boolean,
@@ -1070,6 +1018,19 @@ private fun enhancedStateToText(state: EnhancedState): String {
         EnhancedState.CLEAR_PROBE -> "观察中"
         EnhancedState.SUSPENDED_BY_CALL -> "通话暂停"
     }
+}
+
+private fun defaultGuardPublicProjectionInput(
+    enhancedEnabled: Boolean,
+): GuardPublicProjectionInput {
+    return GuardPublicProjectionInput(
+        status = GuardStatus.NO_HEADSET,
+        enhancedState = if (enhancedEnabled) EnhancedState.WAITING_HEADSET else EnhancedState.DISABLED,
+        enhancedModeEnabled = enhancedEnabled,
+        headsetName = null,
+        heldRouteMessage = null,
+        canManuallyReleaseHeldRoute = false,
+    )
 }
 
 @Composable

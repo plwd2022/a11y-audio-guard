@@ -97,21 +97,14 @@ class AudioFixTile : TileService() {
                 subtitle = "准备中"
             )
 
-        val subtitle = when {
-            monitor.canManuallyReleaseHeldRoute() -> "外放占用"
-            monitor.getHeldRouteMessage() != null -> "观察中"
-            else -> when (monitor.getStatus()) {
-                GuardStatus.NORMAL -> monitor.findConnectedHeadset()?.productName?.toString() ?: "保护中"
-                GuardStatus.FIXED -> "已收回"
-                GuardStatus.FIXED_BUT_SPEAKER_ROUTE -> "已收回"
-                GuardStatus.HIJACKED -> "疑似外放"
-                GuardStatus.NO_HEADSET -> "未接耳机"
-            }
-        }
+        val publicProjection = GuardPublicProjectionResolver.resolve(
+            serviceRunning = true,
+            input = monitor.getPublicProjectionInput(),
+        )
 
         return TilePresentation(
             state = Tile.STATE_ACTIVE,
-            subtitle = subtitle
+            subtitle = publicProjection.tileSubtitle
         )
     }
 }

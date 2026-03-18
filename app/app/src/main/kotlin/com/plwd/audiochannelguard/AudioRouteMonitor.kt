@@ -1134,20 +1134,36 @@ class AudioRouteMonitor(private val context: Context) {
 
     fun canManuallyReleaseHeldRoute(): Boolean {
         return callOnMonitorThread(false) {
-            val headset = findConnectedHeadset()
-            headset != null &&
-                hasActiveHeldRoute(headset) &&
-                !heldRouteManualReleaseInProgress
+            hasManualHeldRouteRelease(findConnectedHeadset())
         }
     }
 
     fun getHeldRouteMessage(): String? {
         return callOnMonitorThread<String?>(null) {
-            if (heldRouteManualReleaseInProgress || hasActiveHeldRoute()) {
-                heldRouteMessage
-            } else {
-                null
-            }
+            currentHeldRouteMessage(findConnectedHeadset())
+        }
+    }
+
+    fun getPublicProjectionInput(statusOverride: GuardStatus? = null): GuardPublicProjectionInput {
+        return callOnMonitorThread(
+            GuardPublicProjectionInput(
+                status = GuardStatus.NO_HEADSET,
+                enhancedState = EnhancedState.DISABLED,
+                enhancedModeEnabled = false,
+                headsetName = null,
+                heldRouteMessage = null,
+                canManuallyReleaseHeldRoute = false,
+            )
+        ) {
+            val headset = findConnectedHeadset()
+            GuardPublicProjectionInput(
+                status = statusOverride ?: resolveCurrentGuardStatus(headset),
+                enhancedState = if (enhancedModeEnabled) enhancedState else EnhancedState.DISABLED,
+                enhancedModeEnabled = enhancedModeEnabled,
+                headsetName = headset?.productName?.toString(),
+                heldRouteMessage = currentHeldRouteMessage(headset),
+                canManuallyReleaseHeldRoute = hasManualHeldRouteRelease(headset),
+            )
         }
     }
 
@@ -1179,21 +1195,7 @@ class AudioRouteMonitor(private val context: Context) {
 
     fun getStatus(): GuardStatus {
         return callOnMonitorThread(GuardStatus.NO_HEADSET) {
-            val headset = findConnectedHeadset()
-            GuardStatusResolver.resolve(
-                RouteSnapshot(
-                    hasHeadset = headset != null,
-                    communicationDeviceKind = communicationDeviceKind(audioManager.communicationDevice),
-                    pollingPhase = pollingMode.toRoutePollingPhase(),
-                    lastReportedStatus = lastReportedStatus,
-                    isClassicBluetoothPassiveCandidate =
-                        headset != null && shouldUsePassiveClassicBluetoothConfirmation(headset),
-                    hasRecentBuiltinRouteEvidence = hasRecentBuiltinRouteEvidence(),
-                    hasClassicBluetoothStartupObservation = hasClassicBluetoothStartupObservation(),
-                    hasActiveHeldRoute = headset != null && hasActiveHeldRoute(headset),
-                    hasGuardCommunicationHold = hasGuardCommunicationHold(),
-                )
-            )
+            resolveCurrentGuardStatus(findConnectedHeadset())
         }
     }
 
@@ -1911,6 +1913,39 @@ class AudioRouteMonitor(private val context: Context) {
         } else {
             GuardStatus.NORMAL
         }
+    }
+
+    private fun buildRouteSnapshot(headset: AudioDeviceInfo?): RouteSnapshot {
+        return RouteSnapshot(
+            hasHeadset = headset != null,
+            communicationDeviceKind = communicationDeviceKind(audioManager.communicationDevice),
+            pollingPhase = pollingMode.toRoutePollingPhase(),
+            lastReportedStatus = lastReportedStatus,
+            isClassicBluetoothPassiveCandidate =
+                headset != null && shouldUsePassiveClassicBluetoothConfirmation(headset),
+            hasRecentBuiltinRouteEvidence = hasRecentBuiltinRouteEvidence(),
+            hasClassicBluetoothStartupObservation = hasClassicBluetoothStartupObservation(),
+            hasActiveHeldRoute = headset != null && hasActiveHeldRoute(headset),
+            hasGuardCommunicationHold = hasGuardCommunicationHold(),
+        )
+    }
+
+    private fun resolveCurrentGuardStatus(headset: AudioDeviceInfo? = findConnectedHeadset()): GuardStatus {
+        return GuardStatusResolver.resolve(buildRouteSnapshot(headset))
+    }
+
+    private fun currentHeldRouteMessage(headset: AudioDeviceInfo? = findConnectedHeadset()): String? {
+        return if (heldRouteManualReleaseInProgress || hasActiveHeldRoute(headset)) {
+            heldRouteMessage
+        } else {
+            null
+        }
+    }
+
+    private fun hasManualHeldRouteRelease(headset: AudioDeviceInfo? = findConnectedHeadset()): Boolean {
+        return headset != null &&
+            hasActiveHeldRoute(headset) &&
+            !heldRouteManualReleaseInProgress
     }
 
     private fun deviceIdentityKey(device: AudioDeviceInfo?): String? {
