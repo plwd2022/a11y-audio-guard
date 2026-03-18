@@ -1569,13 +1569,20 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun shouldKeepHeldRouteAfterRecovery(headset: AudioDeviceInfo): Boolean {
-        if (!hasGuardCommunicationHold()) return false
-        if (hasActiveHeldRoute(headset)) return true
-
-        val commDevice = audioManager.communicationDevice ?: return false
-        val communicationHeadset = findAvailableCommunicationHeadset(headset) ?: return false
-        return isClassicBluetoothDevice(commDevice) &&
-            isSamePhysicalDevice(commDevice, communicationHeadset)
+        val commDevice = audioManager.communicationDevice
+        val communicationHeadset = findAvailableCommunicationHeadset(headset)
+        return HeldRouteRecoveryResolver.resolve(
+            HeldRouteRecoveryDecisionInput(
+                hasGuardCommunicationHold = hasGuardCommunicationHold(),
+                hasActiveHeldRoute = hasActiveHeldRoute(headset),
+                communicationDeviceIsClassicBluetooth =
+                    commDevice?.let { isClassicBluetoothDevice(it) } ?: false,
+                communicationDeviceMatchesAvailableHeadset =
+                    commDevice != null &&
+                        communicationHeadset != null &&
+                        isSamePhysicalDevice(commDevice, communicationHeadset),
+            )
+        ).outcome == HeldRouteRecoveryOutcome.KEEP_HELD_ROUTE
     }
 
     private fun enterHeldRoute(headset: AudioDeviceInfo, reason: String) {
