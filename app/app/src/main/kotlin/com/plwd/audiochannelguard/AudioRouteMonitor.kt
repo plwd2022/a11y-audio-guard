@@ -797,74 +797,99 @@ class AudioRouteMonitor(private val context: Context) {
     private fun handleRecoveryWindowTick() {
         if (pollingMode != PollingMode.RECOVERY_WINDOW) return
 
-        if (System.currentTimeMillis() >= recoveryDeadlineMs) {
+        val headset = findConnectedHeadset()
+        val commDevice = audioManager.communicationDevice
+        val communicationHeadset = headset?.let { findAvailableCommunicationHeadset(it) }
+        val decision = RecoveryWindowResolver.resolve(
+            RecoveryWindowDecisionInput(
+                timedOut = System.currentTimeMillis() >= recoveryDeadlineMs,
+                hasHeadset = headset != null,
+                communicationDeviceKind = communicationDeviceKind(commDevice),
+                communicationDeviceMatchesHeadset =
+                    commDevice != null &&
+                        communicationHeadset != null &&
+                        isSamePhysicalDevice(commDevice, communicationHeadset),
+                stableHitCount = stableHitCount,
+                requiredStableHits = REQUIRED_STABLE_HITS,
+                isClassicBluetoothPassiveCandidate =
+                    headset?.let { shouldUsePassiveClassicBluetoothConfirmation(it) } ?: false,
+                shouldKeepHeldRouteAfterRecovery =
+                    headset?.let { shouldKeepHeldRouteAfterRecovery(it) } ?: false,
+                hasGuardCommunicationHold = hasGuardCommunicationHold(),
+            )
+        )
+        stableHitCount = decision.nextStableHitCount
+
+        if (decision.outcome == RecoveryWindowOutcome.STOP_TIMEOUT) {
             stopRecoveryWindow("恢复观察窗口超时")
             return
         }
 
-        val headset = findConnectedHeadset()
-        if (headset == null) {
+        if (decision.outcome == RecoveryWindowOutcome.STOP_NO_HEADSET) {
             stopRecoveryWindow("恢复观察窗口内未检测到耳机")
             reportStatus(GuardStatus.NO_HEADSET)
             return
         }
 
-        val commDevice = audioManager.communicationDevice
-        if (commDevice?.type in BUILTIN_TYPES) {
-            stableHitCount = 0
-            if (shouldUsePassiveClassicBluetoothConfirmation(headset)) {
+        val availableHeadset = headset ?: return
+        when (decision.outcome) {
+            RecoveryWindowOutcome.START_CLASSIC_BLUETOOTH_CONFIRM -> {
                 clearBuiltinRouteEvidence()
                 startClassicBluetoothConfirm(
-                    headset = headset,
+                    headset = availableHeadset,
                     builtInType = commDevice?.type,
                     reason = "恢复观察窗口检测到声道切到${builtinDeviceName(commDevice?.type)}"
                 )
-            } else {
+                return
+            }
+
+            RecoveryWindowOutcome.RESTORE_BUILTIN_ROUTE -> {
                 rememberBuiltinRouteEvidence(commDevice?.type)
                 restoreCommunicationToHeadset(
-                    preferredOutputDevice = headset,
+                    preferredOutputDevice = availableHeadset,
                     reason = "恢复观察窗口检测到声道再次被劫持到${builtinDeviceName(commDevice?.type)}"
                 )
                 handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
-            }
-            return
-        }
-
-        val communicationHeadset = findAvailableCommunicationHeadset(headset)
-        val isStable =
-            commDevice != null && communicationHeadset != null && isSamePhysicalDevice(commDevice, communicationHeadset)
-
-        if (isStable) {
-            stableHitCount++
-            if (stableHitCount >= REQUIRED_STABLE_HITS) {
-                val reason = "路由已连续稳定 $REQUIRED_STABLE_HITS 次"
-                if (shouldKeepHeldRouteAfterRecovery(headset)) {
-                    stopRecoveryWindow(reason)
-                    if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
-                        updateEnhancedState(EnhancedState.ACTIVE)
-                    }
-                    if (!hasActiveHeldRoute(headset)) {
-                        enterHeldRoute(headset, reason)
-                    } else {
-                        syncHeldRouteTracking(headset)
-                    }
-                    reportStatus(GuardStatus.FIXED)
-                } else if (hasGuardCommunicationHold()) {
-                    startReleaseProbe(headset, reason)
-                } else {
-                    stopRecoveryWindow(reason)
-                    if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
-                        updateEnhancedState(EnhancedState.ACTIVE)
-                    }
-                    reportStatus(GuardStatus.NORMAL)
-                }
                 return
             }
-        } else {
-            stableHitCount = 0
-        }
 
-        handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
+            RecoveryWindowOutcome.ENTER_HELD_ROUTE -> {
+                val reason = "路由已连续稳定 $REQUIRED_STABLE_HITS 次"
+                stopRecoveryWindow(reason)
+                if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                    updateEnhancedState(EnhancedState.ACTIVE)
+                }
+                if (!hasActiveHeldRoute(availableHeadset)) {
+                    enterHeldRoute(availableHeadset, reason)
+                } else {
+                    syncHeldRouteTracking(availableHeadset)
+                }
+                reportStatus(GuardStatus.FIXED)
+                return
+            }
+
+            RecoveryWindowOutcome.START_RELEASE_PROBE -> {
+                startReleaseProbe(availableHeadset, "路由已连续稳定 $REQUIRED_STABLE_HITS 次")
+                return
+            }
+
+            RecoveryWindowOutcome.FINISH_NORMAL -> {
+                stopRecoveryWindow("路由已连续稳定 $REQUIRED_STABLE_HITS 次")
+                if (enhancedModeEnabled && enhancedState != EnhancedState.SUSPENDED_BY_CALL) {
+                    updateEnhancedState(EnhancedState.ACTIVE)
+                }
+                reportStatus(GuardStatus.NORMAL)
+                return
+            }
+
+            RecoveryWindowOutcome.CONTINUE_POLLING -> {
+                handler.postDelayed(pollingRunnable, RECOVERY_POLL_MS)
+                return
+            }
+
+            RecoveryWindowOutcome.STOP_TIMEOUT,
+            RecoveryWindowOutcome.STOP_NO_HEADSET -> return
+        }
     }
 
     private fun handleReleaseProbeTick() {
