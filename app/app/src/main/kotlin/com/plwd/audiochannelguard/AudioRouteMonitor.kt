@@ -2190,29 +2190,22 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun heldRouteSubject(kind: HeldRouteKind): String {
-        return if (kind == HeldRouteKind.CLASSIC_BLUETOOTH) "蓝牙音频" else "耳机声道"
+        return HeldRoutePresentationResolver.subject(kind)
     }
 
     private fun heldRoutePinnedLabel(headset: AudioDeviceInfo, kind: HeldRouteKind): String {
-        return if (kind == HeldRouteKind.CLASSIC_BLUETOOTH) {
-            heldRouteSubject(kind)
-        } else {
-            headset.productName?.toString() ?: heldRouteSubject(kind)
-        }
+        return HeldRoutePresentationResolver.pinnedLabel(
+            kind = kind,
+            headsetName = headset.productName?.toString(),
+        )
     }
 
     private fun heldRouteIdleMessage(kind: HeldRouteKind): String {
-        return if (kind == HeldRouteKind.CLASSIC_BLUETOOTH) {
-            "蓝牙音频已被应用接管，如抢占声道应用已关闭，您可点击尝试解除该限制"
-        } else {
-            "耳机声道已被应用持续占用，如抢占声道应用已关闭，您可点击尝试解除该限制"
-        }
+        return HeldRoutePresentationResolver.idleMessage(kind)
     }
 
     private fun heldRouteRetryMessage(kind: HeldRouteKind, wasManualRelease: Boolean): String {
-        val route = heldRouteSubject(kind)
-        val retryWord = if (wasManualRelease) "再次" else ""
-        return "检测到声道劫持，已重新接管$route。如抢占声道应用已关闭，您可${retryWord}尝试解除该限制"
+        return HeldRoutePresentationResolver.retryMessage(kind, wasManualRelease)
     }
 
     private fun hasActiveHeldRoute(headset: AudioDeviceInfo? = findConnectedHeadset()): Boolean {
