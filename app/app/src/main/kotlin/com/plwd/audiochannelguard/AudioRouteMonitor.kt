@@ -78,11 +78,18 @@ class AudioRouteMonitor(private val context: Context) {
         val lastPassiveSkipLoggedAtElapsedMs: Long = 0L,
     )
 
+    private data class ClassicBluetoothWidebandState(
+        val enabled: Boolean = false,
+        val attemptTimesMs: Map<String, Long> = emptyMap(),
+    )
+
     private data class ClassicBluetoothState(
+        val softGuardEnabled: Boolean = false,
         val confirm: ClassicBluetoothConfirmState = ClassicBluetoothConfirmState(),
         val startupObserve: ClassicBluetoothStartupObserveState = ClassicBluetoothStartupObserveState(),
         val softGuardRuntime: ClassicBluetoothSoftGuardRuntimeState =
             ClassicBluetoothSoftGuardRuntimeState(),
+        val wideband: ClassicBluetoothWidebandState = ClassicBluetoothWidebandState(),
     )
 
     companion object {
@@ -163,8 +170,6 @@ class AudioRouteMonitor(private val context: Context) {
     private var releaseProbeHeadset: AudioDeviceInfo? = null
     private var enhancedModeEnabled = false
     private var enhancedState = EnhancedState.DISABLED
-    private var classicBluetoothSoftGuardEnabled = false
-    private var classicBluetoothWidebandEnabled = false
     private var modeListenerRegistered = false
     private var modeRequestedByEnhanced = false
     private var guardOwnsCommunicationDevice = false
@@ -173,7 +178,6 @@ class AudioRouteMonitor(private val context: Context) {
     private var lastRestoreAttemptAtElapsedMs = 0L
     private var classicBluetoothState = ClassicBluetoothState()
     private var lastBuiltinRouteEvidenceAtElapsedMs = 0L
-    private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
     private val statusListeners = linkedSetOf<(GuardStatus) -> Unit>()
     private val fixLogListeners = linkedSetOf<() -> Unit>()
     private val enhancedStateListeners = linkedSetOf<(EnhancedState) -> Unit>()
@@ -410,7 +414,7 @@ class AudioRouteMonitor(private val context: Context) {
                     stopClassicBluetoothStartupObservation("耳机全部断开", announce = false)
                     stopRecoveryWindow("耳机全部断开")
                     stopReleaseProbe("耳机全部断开")
-                    classicBluetoothWidebandAttemptTimesMs.clear()
+                    clearClassicBluetoothWidebandAttempts()
                     clearBuiltinRouteEvidence()
                     clearHeldRouteState()
                     clearCommunicationDeviceSafely()
@@ -460,7 +464,7 @@ class AudioRouteMonitor(private val context: Context) {
         headset: AudioDeviceInfo,
         routedDevice: AudioDeviceInfo?,
     ): Boolean {
-        return classicBluetoothSoftGuardEnabled &&
+        return classicBluetoothState.softGuardEnabled &&
             isClassicBluetoothOutputDevice(headset) &&
             routedDevice?.type !in BUILTIN_TYPES
     }
@@ -525,7 +529,7 @@ class AudioRouteMonitor(private val context: Context) {
     ): Boolean {
         if (
             !heldRouteState.manualReleaseInProgress ||
-            !classicBluetoothSoftGuardEnabled ||
+            !classicBluetoothState.softGuardEnabled ||
             !isClassicBluetoothOutputDevice(headset)
         ) {
             return false
@@ -571,7 +575,7 @@ class AudioRouteMonitor(private val context: Context) {
     ) {
         if (!running || !shouldUsePassiveClassicBluetoothConfirmation(headset)) return
 
-        if (!classicBluetoothSoftGuardEnabled) {
+        if (!classicBluetoothState.softGuardEnabled) {
             clearBuiltinRouteEvidence()
             maybeLogPassiveClassicBluetoothObservation(headset, reason)
             reportStatus(GuardStatus.NORMAL)
@@ -1244,7 +1248,7 @@ class AudioRouteMonitor(private val context: Context) {
                 stopReleaseProbe("守护停止")
                 unregisterModeListenerIfNeeded()
                 tryLeaveCommunicationMode("守护停止")
-                classicBluetoothWidebandAttemptTimesMs.clear()
+                clearClassicBluetoothWidebandAttempts()
                 clearBuiltinRouteEvidence()
                 clearHeldRouteState()
                 stopClassicBluetoothSoftGuard("守护停止")
@@ -1318,8 +1322,8 @@ class AudioRouteMonitor(private val context: Context) {
 
     fun setClassicBluetoothSoftGuardEnabled(enabled: Boolean) {
         runOnMonitorThread {
-            if (classicBluetoothSoftGuardEnabled == enabled) return@runOnMonitorThread
-            classicBluetoothSoftGuardEnabled = enabled
+            if (classicBluetoothState.softGuardEnabled == enabled) return@runOnMonitorThread
+            classicBluetoothState = classicBluetoothState.copy(softGuardEnabled = enabled)
             if (!enabled) {
                 stopClassicBluetoothStartupObservation("经典蓝牙保真守护已关闭", announce = false)
             }
@@ -1328,20 +1332,23 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     fun isClassicBluetoothSoftGuardEnabled(): Boolean =
-        callOnMonitorThread(false) { classicBluetoothSoftGuardEnabled }
+        callOnMonitorThread(false) { classicBluetoothState.softGuardEnabled }
 
     fun setClassicBluetoothWidebandEnabled(enabled: Boolean) {
         runOnMonitorThread {
-            if (classicBluetoothWidebandEnabled == enabled) return@runOnMonitorThread
-            classicBluetoothWidebandEnabled = enabled
+            if (classicBluetoothState.wideband.enabled == enabled) return@runOnMonitorThread
+            classicBluetoothState =
+                classicBluetoothState.copy(
+                    wideband = classicBluetoothState.wideband.copy(enabled = enabled)
+                )
             if (!enabled) {
-                classicBluetoothWidebandAttemptTimesMs.clear()
+                clearClassicBluetoothWidebandAttempts()
             }
         }
     }
 
     fun isClassicBluetoothWidebandEnabled(): Boolean =
-        callOnMonitorThread(false) { classicBluetoothWidebandEnabled }
+        callOnMonitorThread(false) { classicBluetoothState.wideband.enabled }
 
     fun canManuallyReleaseHeldRoute(): Boolean {
         return callOnMonitorThread(false) {
@@ -1851,11 +1858,11 @@ class AudioRouteMonitor(private val context: Context) {
     ) {
         val attemptKey = classicBluetoothWidebandAttemptKey(targetDevice)
         val now = System.currentTimeMillis()
-        val lastAttemptAt = classicBluetoothWidebandAttemptTimesMs[attemptKey]
+        val lastAttemptAt = classicBluetoothState.wideband.attemptTimesMs[attemptKey]
         val decision = ClassicBluetoothWidebandAttemptResolver.resolve(
             ClassicBluetoothWidebandAttemptInput(
                 monitorRunning = running,
-                widebandEnabled = classicBluetoothWidebandEnabled,
+                widebandEnabled = classicBluetoothState.wideband.enabled,
                 isClassicBluetoothTarget = isClassicBluetoothDevice(targetDevice),
                 suspendedByCall = shouldSuspendForCall(audioManager.mode),
                 previousDeviceKind = communicationDeviceKind(previousCommunicationDevice),
@@ -1870,7 +1877,7 @@ class AudioRouteMonitor(private val context: Context) {
             return
         }
 
-        classicBluetoothWidebandAttemptTimesMs[attemptKey] = now
+        rememberClassicBluetoothWidebandAttempt(attemptKey, now)
         applyClassicBluetoothWidebandHint(
             targetDevice,
             "已尝试为经典蓝牙争取更清晰的通话音质（16k）"
@@ -1885,7 +1892,7 @@ class AudioRouteMonitor(private val context: Context) {
     private fun retryClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo, delayMs: Long) {
         if (
             !running ||
-            !classicBluetoothWidebandEnabled ||
+            !classicBluetoothState.wideband.enabled ||
             !isClassicBluetoothDevice(targetDevice) ||
             shouldSuspendForCall(audioManager.mode)
         ) {
@@ -1929,6 +1936,26 @@ class AudioRouteMonitor(private val context: Context) {
             return "${device.type}:$address"
         }
         return "${device.type}:${device.productName}"
+    }
+
+    private fun rememberClassicBluetoothWidebandAttempt(attemptKey: String, atMs: Long) {
+        classicBluetoothState =
+            classicBluetoothState.copy(
+                wideband =
+                    classicBluetoothState.wideband.copy(
+                        attemptTimesMs = classicBluetoothState.wideband.attemptTimesMs + (attemptKey to atMs)
+                    )
+            )
+    }
+
+    private fun clearClassicBluetoothWidebandAttempts() {
+        if (classicBluetoothState.wideband.attemptTimesMs.isEmpty()) {
+            return
+        }
+        classicBluetoothState =
+            classicBluetoothState.copy(
+                wideband = classicBluetoothState.wideband.copy(attemptTimesMs = emptyMap())
+            )
     }
 
     private fun clearCommunicationDeviceSafely() {
@@ -1989,7 +2016,7 @@ class AudioRouteMonitor(private val context: Context) {
         val decision = ClassicBluetoothSoftGuardSyncResolver.resolve(
             ClassicBluetoothSoftGuardSyncInput(
                 monitorRunning = running,
-                softGuardEnabled = classicBluetoothSoftGuardEnabled,
+                softGuardEnabled = classicBluetoothState.softGuardEnabled,
                 hasHeadset = headset != null,
                 isClassicBluetoothHeadset =
                     headset?.let { isClassicBluetoothOutputDevice(it) } ?: false,
@@ -2075,7 +2102,7 @@ class AudioRouteMonitor(private val context: Context) {
             ClassicBluetoothSoftGuardResolver.resolve(
                 ClassicBluetoothSoftGuardDecisionInput(
                     monitorRunning = running,
-                    softGuardEnabled = classicBluetoothSoftGuardEnabled,
+                    softGuardEnabled = classicBluetoothState.softGuardEnabled,
                     softGuardRunning = classicBluetoothSoftGuard.isRunning(),
                     pollingPhase = pollingMode.toRoutePollingPhase(),
                     hasGuardCommunicationHold = hasGuardCommunicationHold(),
