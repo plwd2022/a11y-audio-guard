@@ -1879,27 +1879,22 @@ class AudioRouteMonitor(private val context: Context) {
         handler.removeCallbacks(classicBluetoothSoftGuardVerificationRunnable)
 
         val headset = findConnectedHeadset()
-        val shouldRunInConfirm =
-            classicBluetoothSoftGuardEnabled &&
-                pollingMode == PollingMode.CLASSIC_BLUETOOTH_CONFIRM &&
-                !hasGuardCommunicationHold()
-        val shouldRunInStartupObserve =
-            classicBluetoothSoftGuardEnabled &&
-                hasClassicBluetoothStartupObservation() &&
-                !hasGuardCommunicationHold()
-        val shouldRunInManualRelease =
-            classicBluetoothSoftGuardEnabled &&
-                pollingMode == PollingMode.RELEASE_PROBE &&
-                heldRouteState.manualReleaseInProgress &&
-                !hasGuardCommunicationHold()
-        val shouldRun =
-            running &&
-                headset != null &&
-                isClassicBluetoothOutputDevice(headset) &&
-                (shouldRunInConfirm || shouldRunInStartupObserve || shouldRunInManualRelease) &&
-                !shouldSuspendForCall(audioManager.mode)
+        val decision = ClassicBluetoothSoftGuardSyncResolver.resolve(
+            ClassicBluetoothSoftGuardSyncInput(
+                monitorRunning = running,
+                softGuardEnabled = classicBluetoothSoftGuardEnabled,
+                hasHeadset = headset != null,
+                isClassicBluetoothHeadset =
+                    headset?.let { isClassicBluetoothOutputDevice(it) } ?: false,
+                pollingPhase = pollingMode.toRoutePollingPhase(),
+                hasStartupObservation = hasClassicBluetoothStartupObservation(),
+                manualReleaseInProgress = heldRouteState.manualReleaseInProgress,
+                hasGuardCommunicationHold = hasGuardCommunicationHold(),
+                suspendedByCall = shouldSuspendForCall(audioManager.mode),
+            )
+        )
 
-        if (!shouldRun) {
+        if (!decision.shouldRun) {
             stopClassicBluetoothSoftGuard(reason)
             return
         }
