@@ -70,6 +70,14 @@ class AudioRouteMonitor(private val context: Context) {
             get() = headset != null && deadlineElapsedMs != 0L
     }
 
+    private data class ClassicBluetoothSoftGuardRuntimeState(
+        val startedAtElapsedMs: Long = 0L,
+        val lastEscalationAtElapsedMs: Long = 0L,
+        val lastPassiveObserveLoggedAtElapsedMs: Long = 0L,
+        val lastReleaseObserveLoggedAtElapsedMs: Long = 0L,
+        val lastPassiveSkipLoggedAtElapsedMs: Long = 0L,
+    )
+
     companion object {
         private const val TAG = "AudioRouteMonitor"
 
@@ -158,12 +166,8 @@ class AudioRouteMonitor(private val context: Context) {
     private var heldRouteState = HeldRouteState()
     private var lastRestoreAttemptDeviceKey: String? = null
     private var lastRestoreAttemptAtElapsedMs = 0L
-    private var classicBluetoothSoftGuardStartedAtElapsedMs = 0L
-    private var lastSoftGuardEscalationAtElapsedMs = 0L
+    private var classicBluetoothSoftGuardRuntimeState = ClassicBluetoothSoftGuardRuntimeState()
     private var lastBuiltinRouteEvidenceAtElapsedMs = 0L
-    private var lastClassicBluetoothPassiveObserveLoggedAtElapsedMs = 0L
-    private var lastClassicBluetoothReleaseObserveLoggedAtElapsedMs = 0L
-    private var lastSoftGuardPassiveSkipLoggedAtElapsedMs = 0L
     private val classicBluetoothWidebandAttemptTimesMs = mutableMapOf<String, Long>()
     private val statusListeners = linkedSetOf<(GuardStatus) -> Unit>()
     private val fixLogListeners = linkedSetOf<() -> Unit>()
@@ -428,10 +432,14 @@ class AudioRouteMonitor(private val context: Context) {
         reason: String,
     ) {
         val now = SystemClock.elapsedRealtime()
-        if (now - lastClassicBluetoothPassiveObserveLoggedAtElapsedMs < CLASSIC_BLUETOOTH_PASSIVE_OBSERVE_LOG_COOLDOWN_MS) {
+        if (
+            now - classicBluetoothSoftGuardRuntimeState.lastPassiveObserveLoggedAtElapsedMs <
+            CLASSIC_BLUETOOTH_PASSIVE_OBSERVE_LOG_COOLDOWN_MS
+        ) {
             return
         }
-        lastClassicBluetoothPassiveObserveLoggedAtElapsedMs = now
+        classicBluetoothSoftGuardRuntimeState =
+            classicBluetoothSoftGuardRuntimeState.copy(lastPassiveObserveLoggedAtElapsedMs = now)
         addLog(
             "$reason，经典蓝牙默认先观察，不主动接管 ${headset.productName}",
             code = FixEventCode.CLASSIC_BLUETOOTH_OBSERVING,
@@ -475,12 +483,13 @@ class AudioRouteMonitor(private val context: Context) {
     ) {
         val now = SystemClock.elapsedRealtime()
         if (
-            now - lastClassicBluetoothReleaseObserveLoggedAtElapsedMs <
+            now - classicBluetoothSoftGuardRuntimeState.lastReleaseObserveLoggedAtElapsedMs <
             CLASSIC_BLUETOOTH_RELEASE_OBSERVE_LOG_COOLDOWN_MS
         ) {
             return
         }
-        lastClassicBluetoothReleaseObserveLoggedAtElapsedMs = now
+        classicBluetoothSoftGuardRuntimeState =
+            classicBluetoothSoftGuardRuntimeState.copy(lastReleaseObserveLoggedAtElapsedMs = now)
 
         val message = if (routedDevice != null) {
             "归还系统后通信设备显示为${builtinDeviceName(builtInDevice.type)}，" +
@@ -1925,10 +1934,14 @@ class AudioRouteMonitor(private val context: Context) {
         builtInDevice: AudioDeviceInfo,
         nowElapsedMs: Long,
     ) {
-        if (nowElapsedMs - lastSoftGuardPassiveSkipLoggedAtElapsedMs < SOFT_GUARD_PASSIVE_SKIP_LOG_COOLDOWN_MS) {
+        if (
+            nowElapsedMs - classicBluetoothSoftGuardRuntimeState.lastPassiveSkipLoggedAtElapsedMs <
+            SOFT_GUARD_PASSIVE_SKIP_LOG_COOLDOWN_MS
+        ) {
             return
         }
-        lastSoftGuardPassiveSkipLoggedAtElapsedMs = nowElapsedMs
+        classicBluetoothSoftGuardRuntimeState =
+            classicBluetoothSoftGuardRuntimeState.copy(lastPassiveSkipLoggedAtElapsedMs = nowElapsedMs)
         addLog(
             "经典蓝牙保真守护检测到无障碍音频落到${builtinDeviceName(builtInDevice.type)}，" +
                 "但未发现明确声道劫持，暂不强制接管 ${headset.productName}",
@@ -1982,7 +1995,10 @@ class AudioRouteMonitor(private val context: Context) {
                 !isSamePhysicalDevice(previousTarget, targetHeadset) ||
                 previousMode != requestedMode
         if (retargeted) {
-            classicBluetoothSoftGuardStartedAtElapsedMs = SystemClock.elapsedRealtime()
+            classicBluetoothSoftGuardRuntimeState =
+                classicBluetoothSoftGuardRuntimeState.copy(
+                    startedAtElapsedMs = SystemClock.elapsedRealtime()
+                )
             addLog(
                 "经典蓝牙保真守护已启动(观察模式): ${targetHeadset.productName}",
                 code = FixEventCode.SOFT_GUARD_STARTED,
@@ -2034,9 +2050,10 @@ class AudioRouteMonitor(private val context: Context) {
                     routedDeviceKind = communicationDeviceKind(currentRoutedDevice),
                     hasRecentBuiltinRouteEvidence = hasRecentBuiltinRouteEvidence(now),
                     hasWaitedForVerifyDelay =
-                        now - classicBluetoothSoftGuardStartedAtElapsedMs >= SOFT_GUARD_VERIFY_DELAY_MS,
+                        now - classicBluetoothSoftGuardRuntimeState.startedAtElapsedMs >= SOFT_GUARD_VERIFY_DELAY_MS,
                     isEscalationCooldownElapsed =
-                        now - lastSoftGuardEscalationAtElapsedMs >= SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS,
+                        now - classicBluetoothSoftGuardRuntimeState.lastEscalationAtElapsedMs >=
+                            SOFT_GUARD_HARD_RECLAIM_COOLDOWN_MS,
                 )
             ).outcome
         ) {
@@ -2061,7 +2078,8 @@ class AudioRouteMonitor(private val context: Context) {
             ClassicBluetoothSoftGuardOutcome.WAIT_FOR_ESCALATION_COOLDOWN -> return
 
             ClassicBluetoothSoftGuardOutcome.ESCALATE -> {
-                lastSoftGuardEscalationAtElapsedMs = now
+                classicBluetoothSoftGuardRuntimeState =
+                    classicBluetoothSoftGuardRuntimeState.copy(lastEscalationAtElapsedMs = now)
             }
         }
 
