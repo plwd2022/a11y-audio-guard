@@ -1849,20 +1849,24 @@ class AudioRouteMonitor(private val context: Context) {
         targetDevice: AudioDeviceInfo,
         previousCommunicationDevice: AudioDeviceInfo?,
     ) {
-        if (
-            !running ||
-            !classicBluetoothWidebandEnabled ||
-            !isClassicBluetoothDevice(targetDevice) ||
-            shouldSuspendForCall(audioManager.mode) ||
-            !shouldAttemptClassicBluetoothWidebandHint(previousCommunicationDevice, targetDevice)
-        ) {
-            return
-        }
-
         val attemptKey = classicBluetoothWidebandAttemptKey(targetDevice)
         val now = System.currentTimeMillis()
         val lastAttemptAt = classicBluetoothWidebandAttemptTimesMs[attemptKey]
-        if (lastAttemptAt != null && now - lastAttemptAt < CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS) {
+        val decision = ClassicBluetoothWidebandAttemptResolver.resolve(
+            ClassicBluetoothWidebandAttemptInput(
+                monitorRunning = running,
+                widebandEnabled = classicBluetoothWidebandEnabled,
+                isClassicBluetoothTarget = isClassicBluetoothDevice(targetDevice),
+                suspendedByCall = shouldSuspendForCall(audioManager.mode),
+                previousDeviceKind = communicationDeviceKind(previousCommunicationDevice),
+                previousDeviceMatchesTarget =
+                    previousCommunicationDevice?.let { isSamePhysicalDevice(it, targetDevice) } ?: false,
+                hasRecentAttempt =
+                    lastAttemptAt != null &&
+                        now - lastAttemptAt < CLASSIC_BLUETOOTH_WIDEBAND_COOLDOWN_MS,
+            )
+        )
+        if (decision.outcome != ClassicBluetoothWidebandAttemptOutcome.APPLY_HINT) {
             return
         }
 
@@ -1917,15 +1921,6 @@ class AudioRouteMonitor(private val context: Context) {
     private fun isClassicBluetoothDevice(device: AudioDeviceInfo): Boolean {
         return device.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
             device.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
-    }
-
-    private fun shouldAttemptClassicBluetoothWidebandHint(
-        previousCommunicationDevice: AudioDeviceInfo?,
-        targetDevice: AudioDeviceInfo,
-    ): Boolean {
-        if (previousCommunicationDevice == null) return true
-        if (previousCommunicationDevice.type in BUILTIN_TYPES) return true
-        return !isSamePhysicalDevice(previousCommunicationDevice, targetDevice)
     }
 
     private fun classicBluetoothWidebandAttemptKey(device: AudioDeviceInfo): String {
