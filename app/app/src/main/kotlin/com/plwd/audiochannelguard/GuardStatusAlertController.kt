@@ -69,9 +69,6 @@ class GuardStatusAlertController(context: Context) {
     }
 
     private fun shouldUseStatusAlerts(): Boolean {
-        if (!AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(appContext)) {
-            return false
-        }
         if (!notificationManager.areNotificationsEnabled()) {
             return false
         }

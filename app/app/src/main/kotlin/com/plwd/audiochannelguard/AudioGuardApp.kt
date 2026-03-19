@@ -25,8 +25,6 @@ class AudioGuardApp : Application() {
         private const val KEY_TILE_ADDED = "tile_added"
         private const val KEY_AUTO_START_CONFIRMED = "auto_start_confirmed"
         private const val KEY_BG_RESTRICT_CONFIRMED = "bg_restrict_confirmed"
-        private const val KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN =
-            "status_alert_when_persistent_hidden"
         private const val KEY_RELATED_APP_HINT = "related_app_hint"
 
         // Release keystore (plwd_cn.keystore) signing certificate SHA-256
@@ -124,15 +122,6 @@ class AudioGuardApp : Application() {
 
         fun setBgRestrictConfirmed(context: Context, confirmed: Boolean) {
             putBooleanSync(context, KEY_BG_RESTRICT_CONFIRMED, confirmed)
-        }
-
-        fun isStatusAlertWhenPersistentHiddenEnabled(context: Context): Boolean {
-            return prefs(context)
-                .getBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, true)
-        }
-
-        fun setStatusAlertWhenPersistentHiddenEnabled(context: Context, enabled: Boolean) {
-            putBooleanSync(context, KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, enabled)
         }
 
         fun getRelatedAppHint(context: Context): RelatedAppHint? {

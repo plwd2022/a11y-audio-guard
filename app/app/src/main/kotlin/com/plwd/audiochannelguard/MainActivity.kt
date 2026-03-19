@@ -118,8 +118,8 @@ private fun AudioGuardScreen() {
     var persistentChannelBlocked by remember {
         mutableStateOf(AudioGuardService.isPersistentChannelBlocked(context))
     }
-    var statusAlertWhenPersistentHidden by remember {
-        mutableStateOf(AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(context))
+    var alertChannelBlocked by remember {
+        mutableStateOf(AudioGuardService.isAlertChannelBlocked(context))
     }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var isStartingBuiltinDownload by remember { mutableStateOf(false) }
@@ -160,8 +160,7 @@ private fun AudioGuardScreen() {
         classicBluetoothWidebandEnabled = AudioGuardApp.isClassicBluetoothWidebandEnabled(context)
         notificationsEnabled = AudioGuardService.areNotificationsEnabled(context)
         persistentChannelBlocked = AudioGuardService.isPersistentChannelBlocked(context)
-        statusAlertWhenPersistentHidden =
-            AudioGuardApp.isStatusAlertWhenPersistentHiddenEnabled(context)
+        alertChannelBlocked = AudioGuardService.isAlertChannelBlocked(context)
         val monitor = AudioGuardService.getMonitor()
         if (monitor != null) {
             publicProjectionInput = monitor.getPublicProjectionInput()
@@ -560,7 +559,12 @@ private fun AudioGuardScreen() {
     val notificationSummary = guardNotificationSummary(
         notificationsEnabled = notificationsEnabled,
         persistentChannelBlocked = persistentChannelBlocked,
-        statusAlertWhenPersistentHidden = statusAlertWhenPersistentHidden
+        alertChannelBlocked = alertChannelBlocked
+    )
+    val notificationModeLabel = guardNotificationModeLabel(
+        notificationsEnabled = notificationsEnabled,
+        persistentChannelBlocked = persistentChannelBlocked,
+        alertChannelBlocked = alertChannelBlocked
     )
     val toolsSubtitle = if (tileAdded) {
         "控制中心磁贴已添加，可在通知栏快捷开启或关闭保护。"
@@ -794,14 +798,23 @@ private fun AudioGuardScreen() {
                     title = "通知与提醒",
                     subtitle = notificationSummary
                 ) {
-                    MergedTextBlock {
+                    MergedTextBlock(verticalSpacing = 6.dp) {
                         Text(
-                            "想减少打扰时，可关闭“读屏保护常驻提示”。",
+                            "当前模式：$notificationModeLabel",
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                        Text(
+                            "常驻提示：${notificationChannelStateText(notificationsEnabled, persistentChannelBlocked)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "建议保持“读屏异常短提醒”开启。",
+                            "短提醒：${notificationChannelStateText(notificationsEnabled, alertChannelBlocked)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "通知行为完全由系统通知频道决定。想减少打扰时，可在系统里关闭“读屏保护常驻提示”，并保留“读屏异常短提醒”。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -809,34 +822,50 @@ private fun AudioGuardScreen() {
 
                     HorizontalDivider()
 
-                    SettingsToggleRow(
-                        checked = statusAlertWhenPersistentHidden,
-                        title = "常驻关闭时改用短提醒",
-                        summary = "建议保持开启。关闭常驻后，异常和修复状态会改用短提醒，且始终只保留一条并自动清理。",
-                        onToggle = { enabled ->
-                            statusAlertWhenPersistentHidden = enabled
-                            AudioGuardApp.setStatusAlertWhenPersistentHiddenEnabled(context, enabled)
-                            if (!enabled) {
-                                AudioGuardService.cancelAlertNotification(context)
-                            }
-                            scope.launch {
-                                delay(200)
-                                refreshState()
-                            }
-                        }
-                    )
-
-                    HorizontalDivider()
-
-                    OutlinedButton(
-                        onClick = {
-                            if (!openGuardNotificationSettings(context)) {
-                                updateActionMessage = "无法打开应用通知设置，请手动前往系统设置处理"
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text("打开应用通知设置")
+                        OutlinedButton(
+                            onClick = {
+                                if (!openGuardNotificationChannelSettings(
+                                        context,
+                                        AudioGuardService.PERSISTENT_CHANNEL_ID
+                                    )
+                                ) {
+                                    updateActionMessage = "无法打开常驻提示通知设置，请手动前往系统设置处理"
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("打开常驻提示设置")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                if (!openGuardNotificationChannelSettings(
+                                        context,
+                                        AudioGuardService.ALERT_CHANNEL_ID
+                                    )
+                                ) {
+                                    updateActionMessage = "无法打开短提醒通知设置，请手动前往系统设置处理"
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("打开短提醒设置")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                if (!openGuardNotificationSettings(context)) {
+                                    updateActionMessage = "无法打开应用通知设置，请手动前往系统设置处理"
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("打开应用通知设置")
+                        }
                     }
                 }
 
@@ -1039,20 +1068,48 @@ private fun SettingsToggleRow(
 private fun guardNotificationSummary(
     notificationsEnabled: Boolean,
     persistentChannelBlocked: Boolean,
-    statusAlertWhenPersistentHidden: Boolean,
+    alertChannelBlocked: Boolean,
 ): String {
     return when {
         !notificationsEnabled ->
             "系统已关闭本应用通知。常驻和短提醒当前都不会显示。"
 
-        persistentChannelBlocked && statusAlertWhenPersistentHidden ->
+        !persistentChannelBlocked && !alertChannelBlocked ->
+            "当前仍显示常驻提示；若关闭常驻，异常和修复状态会改用短提醒。"
+
+        !persistentChannelBlocked ->
+            "当前仍显示常驻提示，但短提醒已在系统中关闭。若之后关闭常驻，将不会再显示异常和修复提醒。"
+
+        !alertChannelBlocked ->
             "你已关闭常驻提示，当前会改用短提醒。这是更推荐的低打扰设置。"
 
-        persistentChannelBlocked ->
-            "你已关闭常驻提示，但短提醒也关了。建议重新打开短提醒。"
-
         else ->
-            "当前仍显示常驻提示。如觉得打扰，可在系统里关闭它，并保留短提醒。"
+            "你已关闭常驻提示和短提醒，当前不会显示相关提醒。"
+    }
+}
+
+private fun guardNotificationModeLabel(
+    notificationsEnabled: Boolean,
+    persistentChannelBlocked: Boolean,
+    alertChannelBlocked: Boolean,
+): String {
+    return when {
+        !notificationsEnabled -> "全部静默（应用通知已关闭）"
+        !persistentChannelBlocked && !alertChannelBlocked -> "常驻提示"
+        !persistentChannelBlocked -> "常驻提示（短提醒已关闭）"
+        !alertChannelBlocked -> "仅短提醒"
+        else -> "全部静默"
+    }
+}
+
+private fun notificationChannelStateText(
+    notificationsEnabled: Boolean,
+    channelBlocked: Boolean,
+): String {
+    return when {
+        !notificationsEnabled -> "已被系统总开关关闭"
+        channelBlocked -> "已关闭"
+        else -> "已开启"
     }
 }
 
@@ -1615,6 +1672,24 @@ private fun openGuardNotificationSettings(context: Context): Boolean {
         } catch (_: Exception) {
             false
         }
+    }
+}
+
+private fun openGuardNotificationChannelSettings(
+    context: Context,
+    channelId: String,
+): Boolean {
+    val channelIntent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+        putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+
+    return try {
+        context.startActivity(channelIntent)
+        true
+    } catch (_: Exception) {
+        openGuardNotificationSettings(context)
     }
 }
 

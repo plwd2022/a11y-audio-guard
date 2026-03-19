@@ -69,9 +69,11 @@ class AudioGuardService : Service() {
         }
 
         fun isPersistentChannelBlocked(context: Context): Boolean {
-            val channel = context.applicationContext.getSystemService(NotificationManager::class.java)
-                .getNotificationChannel(PERSISTENT_CHANNEL_ID)
-            return channel?.importance == NotificationManager.IMPORTANCE_NONE
+            return isChannelBlocked(context, PERSISTENT_CHANNEL_ID)
+        }
+
+        fun isAlertChannelBlocked(context: Context): Boolean {
+            return isChannelBlocked(context, ALERT_CHANNEL_ID)
         }
 
         fun createReleaseHeldRoutePendingIntent(context: Context): PendingIntent {
@@ -104,6 +106,12 @@ class AudioGuardService : Service() {
                 Log.w(TAG, "Foreground service start blocked by security policy: action=$action", exception)
                 false
             }
+        }
+
+        private fun isChannelBlocked(context: Context, channelId: String): Boolean {
+            val channel = context.applicationContext.getSystemService(NotificationManager::class.java)
+                .getNotificationChannel(channelId)
+            return channel?.importance == NotificationManager.IMPORTANCE_NONE
         }
     }
 
