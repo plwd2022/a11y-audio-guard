@@ -759,8 +759,8 @@ private fun AudioGuardScreen() {
 
                     SettingsToggleRow(
                         checked = classicBluetoothSoftGuardEnabled,
-                        title = "经典蓝牙保真保护（实验性）",
-                        summary = "仅对经典蓝牙耳机生效。会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
+                        title = "经典蓝牙保真保护（建议开启）",
+                        summary = "仅对经典蓝牙耳机生效。建议打开，可提升蓝牙耳机体验。开启后会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
                         onToggle = { enabled ->
                             classicBluetoothSoftGuardEnabled = enabled
                             AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)

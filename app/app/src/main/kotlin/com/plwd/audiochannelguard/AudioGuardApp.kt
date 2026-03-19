@@ -44,101 +44,99 @@ class AudioGuardApp : Application() {
 
         fun getExpectedCertHash(): String = EXPECTED_CERT_HASH
 
+        private fun prefs(context: Context) =
+            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+
+        private fun putBooleanSync(context: Context, key: String, value: Boolean) {
+            prefs(context).edit().putBoolean(key, value).commit()
+        }
+
         fun isGuardEnabled(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_ENABLED, false)
         }
 
         fun setGuardEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_ENABLED, enabled).apply()
+            putBooleanSync(context, KEY_ENABLED, enabled)
             AudioFixTile.requestTileRefresh(context)
         }
 
         fun setGuardEnabledSync(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_ENABLED, enabled).commit()
-            AudioFixTile.requestTileRefresh(context)
+            setGuardEnabled(context, enabled)
         }
 
         fun isEnhancedModeEnabled(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_ENHANCED_MODE, false)
         }
 
         fun setEnhancedModeEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_ENHANCED_MODE, enabled).apply()
+            putBooleanSync(context, KEY_ENHANCED_MODE, enabled)
         }
 
         fun isClassicBluetoothWidebandEnabled(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_CLASSIC_BLUETOOTH_WIDEBAND, false)
         }
 
         fun isClassicBluetoothSoftGuardEnabled(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .getBoolean(KEY_CLASSIC_BLUETOOTH_SOFT_GUARD, false)
+            return prefs(context)
+                .getBoolean(KEY_CLASSIC_BLUETOOTH_SOFT_GUARD, true)
         }
 
         fun setClassicBluetoothSoftGuardEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_CLASSIC_BLUETOOTH_SOFT_GUARD, enabled).apply()
+            putBooleanSync(context, KEY_CLASSIC_BLUETOOTH_SOFT_GUARD, enabled)
         }
 
         fun setClassicBluetoothWidebandEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_CLASSIC_BLUETOOTH_WIDEBAND, enabled).apply()
+            putBooleanSync(context, KEY_CLASSIC_BLUETOOTH_WIDEBAND, enabled)
         }
 
         fun isTileAdded(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_TILE_ADDED, false)
         }
 
         fun setTileAdded(context: Context, added: Boolean) {
-            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val prefs = prefs(context)
             val wasAdded = prefs.getBoolean(KEY_TILE_ADDED, false)
             if (wasAdded == added) return
 
-            prefs.edit().putBoolean(KEY_TILE_ADDED, added).apply()
+            prefs.edit().putBoolean(KEY_TILE_ADDED, added).commit()
             if (added) {
                 AudioFixTile.requestTileRefresh(context)
             }
         }
 
         fun isAutoStartConfirmed(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_AUTO_START_CONFIRMED, false)
         }
 
         fun setAutoStartConfirmed(context: Context, confirmed: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_AUTO_START_CONFIRMED, confirmed).apply()
+            putBooleanSync(context, KEY_AUTO_START_CONFIRMED, confirmed)
         }
 
         fun isBgRestrictConfirmed(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_BG_RESTRICT_CONFIRMED, false)
         }
 
         fun setBgRestrictConfirmed(context: Context, confirmed: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_BG_RESTRICT_CONFIRMED, confirmed).apply()
+            putBooleanSync(context, KEY_BG_RESTRICT_CONFIRMED, confirmed)
         }
 
         fun isStatusAlertWhenPersistentHiddenEnabled(context: Context): Boolean {
-            return context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            return prefs(context)
                 .getBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, true)
         }
 
         fun setStatusAlertWhenPersistentHiddenEnabled(context: Context, enabled: Boolean) {
-            context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
-                .edit().putBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, enabled).apply()
+            putBooleanSync(context, KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, enabled)
         }
 
         fun getRelatedAppHint(context: Context): RelatedAppHint? {
-            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val prefs = prefs(context)
             val raw = prefs.getString(KEY_RELATED_APP_HINT, null) ?: return null
             return try {
                 val json = JSONObject(raw)
@@ -167,7 +165,7 @@ class AudioGuardApp : Application() {
         }
 
         fun setRelatedAppHint(context: Context, hint: RelatedAppHint?) {
-            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val prefs = prefs(context)
             if (hint == null) {
                 prefs.edit().remove(KEY_RELATED_APP_HINT).apply()
                 return
