@@ -51,9 +51,9 @@ object RelatedAppHintProjectionResolver {
             RelatedAppHintKind.EVENT_ONLY -> {
                 val time = formatTime(input.happenedAtMs)
                 val summary = if (input.active) {
-                    "$time 已捕获到读屏声道异常，但暂未定位到具体应用。可继续复现后再观察相关应用线索。"
+                    "$time 已捕获到读屏声道异常，但当前前台应用未形成足够明确的线索。可继续复现后再观察相关应用线索。"
                 } else {
-                    "$time 曾捕获到读屏声道异常，但暂未定位到具体应用。当前如已恢复正常，可先忽略。"
+                    "$time 曾捕获到读屏声道异常，但当前前台应用未形成足够明确的线索。当前如已恢复正常，可先忽略。"
                 }
                 RelatedAppHintProjection(
                     title = "已发生异常",

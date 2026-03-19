@@ -24,6 +24,7 @@ class RelatedAppTracker(
         val score: Int,
         val matchedAtMs: Long,
         val behaviorSummary: String,
+        val hasForegroundEvidence: Boolean,
     )
 
     private data class PackageMetadata(
@@ -36,14 +37,16 @@ class RelatedAppTracker(
         val packageName: String,
         val appLabel: String,
         val lastResumedAtMs: Long = 0L,
-        val lastClosedAtMs: Long = 0L,
+        val lastBackgroundAtMs: Long = 0L,
     )
 
     companion object {
         private const val ACTIVE_WINDOW_MS = 20_000L
         private const val RETENTION_WINDOW_MS = 60_000L
         private const val DISPLAY_SCORE_THRESHOLD = 6
+        private const val DISPLAY_FOREGROUND_SCORE_THRESHOLD = 5
         private const val DISPLAY_SCORE_MARGIN = 2
+        private const val DISPLAY_FOREGROUND_SCORE_MARGIN = 1
     }
 
     private val usageStatsManager =
@@ -160,7 +163,7 @@ class RelatedAppTracker(
     }
 
     private fun resolveBestCandidate(observedAtMs: Long): Candidate? {
-        val lookbackWindowMs = RelatedAppEvidenceResolver.maxLookbackWindowMs()
+        val lookbackWindowMs = RelatedAppEvidenceResolver.currentForegroundLookbackWindowMs()
         val usageEvents = usageStatsManager.queryEvents(
             maxOf(0L, observedAtMs - lookbackWindowMs),
             observedAtMs
@@ -185,7 +188,7 @@ class RelatedAppTracker(
                         packageName = packageName,
                         appLabel = metadata.appLabel,
                         lastResumedAtMs = event.timeStamp,
-                        lastClosedAtMs = current?.lastClosedAtMs ?: 0L,
+                        lastBackgroundAtMs = current?.lastBackgroundAtMs ?: 0L,
                     )
                 }
 
@@ -193,7 +196,7 @@ class RelatedAppTracker(
                 UsageEvents.Event.ACTIVITY_STOPPED -> {
                     val current = activityStates[packageName] ?: continue
                     activityStates[packageName] = current.copy(
-                        lastClosedAtMs = maxOf(current.lastClosedAtMs, event.timeStamp)
+                        lastBackgroundAtMs = maxOf(current.lastBackgroundAtMs, event.timeStamp)
                     )
                 }
             }
@@ -211,33 +214,46 @@ class RelatedAppTracker(
     }
 
     private fun buildCandidate(state: ActivityState, observedAtMs: Long): Candidate? {
-        if (state.lastResumedAtMs == 0L || state.lastClosedAtMs >= state.lastResumedAtMs) {
+        if (state.lastResumedAtMs == 0L) {
             return null
         }
 
         val evidence = RelatedAppEvidenceResolver.resolve(
             RelatedAppEvidenceInput(
-                resumeDeltaMs = observedAtMs - state.lastResumedAtMs
+                resumeDeltaMs = observedAtMs - state.lastResumedAtMs,
+                isForegroundAtIncident = state.lastResumedAtMs > state.lastBackgroundAtMs,
             )
         ) ?: return null
 
+        val hasForegroundEvidence = state.lastResumedAtMs > state.lastBackgroundAtMs
         return Candidate(
             packageName = state.packageName,
             appLabel = state.appLabel,
             score = evidence.score,
-            matchedAtMs = state.lastResumedAtMs,
+            matchedAtMs = if (hasForegroundEvidence) observedAtMs else state.lastResumedAtMs,
             behaviorSummary = evidence.behaviorSummary,
+            hasForegroundEvidence = hasForegroundEvidence,
         )
     }
 
     private fun shouldDisplayCandidate(best: Candidate, second: Candidate?): Boolean {
-        if (best.score < DISPLAY_SCORE_THRESHOLD) {
+        val threshold = if (best.hasForegroundEvidence) {
+            DISPLAY_FOREGROUND_SCORE_THRESHOLD
+        } else {
+            DISPLAY_SCORE_THRESHOLD
+        }
+        if (best.score < threshold) {
             return false
         }
         if (second == null) {
             return true
         }
-        return best.score >= second.score + DISPLAY_SCORE_MARGIN
+        val margin = if (best.hasForegroundEvidence) {
+            DISPLAY_FOREGROUND_SCORE_MARGIN
+        } else {
+            DISPLAY_SCORE_MARGIN
+        }
+        return best.score >= second.score + margin
     }
 
     private fun rebuildHint(now: Long) {
