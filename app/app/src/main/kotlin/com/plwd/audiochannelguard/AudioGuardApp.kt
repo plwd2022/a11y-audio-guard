@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.widget.Toast
+import org.json.JSONObject
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -26,6 +27,7 @@ class AudioGuardApp : Application() {
         private const val KEY_BG_RESTRICT_CONFIRMED = "bg_restrict_confirmed"
         private const val KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN =
             "status_alert_when_persistent_hidden"
+        private const val KEY_RELATED_APP_HINT = "related_app_hint"
 
         // Release keystore (plwd_cn.keystore) signing certificate SHA-256
         private const val EXPECTED_CERT_HASH =
@@ -133,6 +135,55 @@ class AudioGuardApp : Application() {
         fun setStatusAlertWhenPersistentHiddenEnabled(context: Context, enabled: Boolean) {
             context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
                 .edit().putBoolean(KEY_STATUS_ALERT_WHEN_PERSISTENT_HIDDEN, enabled).apply()
+        }
+
+        fun getRelatedAppHint(context: Context): RelatedAppHint? {
+            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val raw = prefs.getString(KEY_RELATED_APP_HINT, null) ?: return null
+            return try {
+                val json = JSONObject(raw)
+                val expiresAtMs = json.optLong("expiresAtMs", 0L)
+                if (expiresAtMs != 0L && System.currentTimeMillis() >= expiresAtMs) {
+                    prefs.edit().remove(KEY_RELATED_APP_HINT).apply()
+                    null
+                } else {
+                    RelatedAppHint(
+                        kind = RelatedAppHintKind.valueOf(
+                            json.optString("kind", RelatedAppHintKind.APP.name)
+                        ),
+                        packageName = json.optString("packageName").ifBlank { null },
+                        appLabel = json.optString("appLabel").ifBlank { null },
+                        happenedAtMs = json.optLong("happenedAtMs", 0L),
+                        behaviorSummary = json.optString("behaviorSummary").ifBlank { null },
+                        active = json.optBoolean("active", false),
+                        activeUntilMs = json.optLong("activeUntilMs", 0L),
+                        expiresAtMs = expiresAtMs,
+                    )
+                }
+            } catch (_: Exception) {
+                prefs.edit().remove(KEY_RELATED_APP_HINT).apply()
+                null
+            }
+        }
+
+        fun setRelatedAppHint(context: Context, hint: RelatedAppHint?) {
+            val prefs = context.getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            if (hint == null) {
+                prefs.edit().remove(KEY_RELATED_APP_HINT).apply()
+                return
+            }
+
+            val raw = JSONObject()
+                .put("kind", hint.kind.name)
+                .put("packageName", hint.packageName.orEmpty())
+                .put("appLabel", hint.appLabel.orEmpty())
+                .put("happenedAtMs", hint.happenedAtMs)
+                .put("behaviorSummary", hint.behaviorSummary.orEmpty())
+                .put("active", hint.active)
+                .put("activeUntilMs", hint.activeUntilMs)
+                .put("expiresAtMs", hint.expiresAtMs)
+                .toString()
+            prefs.edit().putString(KEY_RELATED_APP_HINT, raw).apply()
         }
     }
 

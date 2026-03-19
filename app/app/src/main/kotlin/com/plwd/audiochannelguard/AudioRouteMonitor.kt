@@ -140,6 +140,11 @@ class AudioRouteMonitor(private val context: Context) {
         handler.post(runnable)
     }
     private val listenerLock = Any()
+    private val relatedAppTracker = RelatedAppTracker(
+        context = context.applicationContext,
+        callbackHandler = handler,
+        onHintChanged = ::notifyRelatedAppHintChanged
+    )
     private val classicBluetoothSoftGuard = AccessibilitySoftRouteGuard(
         callbackHandler = handler,
         onRoutedDeviceChanged = ::handleClassicBluetoothSoftGuardRouteChanged
@@ -168,6 +173,7 @@ class AudioRouteMonitor(private val context: Context) {
     private val statusListeners = linkedSetOf<(GuardStatus) -> Unit>()
     private val fixLogListeners = linkedSetOf<() -> Unit>()
     private val enhancedStateListeners = linkedSetOf<(EnhancedState) -> Unit>()
+    private val relatedAppHintListeners = linkedSetOf<() -> Unit>()
     private val classicBluetoothSoftGuardVerificationRunnable = Runnable {
         evaluateClassicBluetoothSoftGuardRoute("经典蓝牙保真守护自检")
     }
@@ -210,6 +216,7 @@ class AudioRouteMonitor(private val context: Context) {
 
     var onFixLogUpdated: (() -> Unit)? = null
     var onEnhancedStateChanged: ((EnhancedState) -> Unit)? = null
+    var onRelatedAppHintChanged: (() -> Unit)? = null
 
     fun addStatusListener(listener: (GuardStatus) -> Unit) {
         synchronized(listenerLock) {
@@ -244,6 +251,26 @@ class AudioRouteMonitor(private val context: Context) {
     fun removeEnhancedStateListener(listener: (EnhancedState) -> Unit) {
         synchronized(listenerLock) {
             enhancedStateListeners.remove(listener)
+        }
+    }
+
+    fun addRelatedAppHintListener(listener: () -> Unit) {
+        synchronized(listenerLock) {
+            relatedAppHintListeners.add(listener)
+        }
+    }
+
+    fun removeRelatedAppHintListener(listener: () -> Unit) {
+        synchronized(listenerLock) {
+            relatedAppHintListeners.remove(listener)
+        }
+    }
+
+    private fun notifyRelatedAppHintChanged() {
+        val listeners = synchronized(listenerLock) { relatedAppHintListeners.toList() }
+        postToMainThread {
+            onRelatedAppHintChanged?.invoke()
+            listeners.forEach { it() }
         }
     }
 
@@ -308,6 +335,9 @@ class AudioRouteMonitor(private val context: Context) {
             }
 
             if (device?.type in BUILTIN_TYPES) {
+                if (shouldCaptureRelatedAppHintForBuiltInRoute()) {
+                    relatedAppTracker.recordInterference()
+                }
                 if (pollingMode == PollingMode.RELEASE_PROBE) {
                     val builtInDevice = device ?: return@OnCommunicationDeviceChangedListener
                     if (maybeContinueClassicBluetoothManualReleaseObservation(headset, builtInDevice)) {
@@ -1243,6 +1273,7 @@ class AudioRouteMonitor(private val context: Context) {
                 clearBuiltinRouteEvidence()
                 clearHeldRouteState()
                 stopClassicBluetoothSoftGuard("守护停止")
+                relatedAppTracker.stop()
                 audioManager.removeOnCommunicationDeviceChangedListener(commDeviceListener)
                 audioManager.unregisterAudioDeviceCallback(deviceCallback)
                 clearCommunicationDeviceSafely()
@@ -1435,6 +1466,18 @@ class AudioRouteMonitor(private val context: Context) {
     fun getStatus(): GuardStatus {
         return callOnMonitorThread(GuardStatus.NO_HEADSET) {
             resolveCurrentGuardStatus(findConnectedHeadset())
+        }
+    }
+
+    fun getRelatedAppHint(): RelatedAppHint? {
+        return callOnMonitorThread<RelatedAppHint?>(null) {
+            relatedAppTracker.getHint()
+        }
+    }
+
+    fun refreshRelatedAppHint() {
+        runOnMonitorThread {
+            relatedAppTracker.refresh()
         }
     }
 
@@ -2207,6 +2250,12 @@ class AudioRouteMonitor(private val context: Context) {
 
     private fun builtinDeviceName(type: Int?): String {
         return if (type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE) "听筒" else "扬声器"
+    }
+
+    private fun shouldCaptureRelatedAppHintForBuiltInRoute(): Boolean {
+        return pollingMode != PollingMode.CLEAR_PROBE &&
+            pollingMode != PollingMode.RELEASE_PROBE &&
+            !heldRouteState.manualReleaseInProgress
     }
 
     private fun heldRouteKindFor(headset: AudioDeviceInfo): HeldRouteKind {

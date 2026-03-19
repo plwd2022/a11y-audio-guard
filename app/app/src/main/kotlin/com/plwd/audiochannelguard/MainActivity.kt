@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -112,6 +113,7 @@ private fun AudioGuardScreen() {
         mutableStateOf(AudioGuardApp.isClassicBluetoothWidebandEnabled(context))
     }
     var commDeviceName by remember { mutableStateOf("无") }
+    var relatedAppHint by remember { mutableStateOf<RelatedAppHint?>(null) }
     var notificationsEnabled by remember { mutableStateOf(AudioGuardService.areNotificationsEnabled(context)) }
     var persistentChannelBlocked by remember {
         mutableStateOf(AudioGuardService.isPersistentChannelBlocked(context))
@@ -129,6 +131,7 @@ private fun AudioGuardScreen() {
     var showPermissionGuide by remember { mutableStateOf(false) }
     var showPermissionWarning by remember { mutableStateOf(false) }
     var showFixLogDialog by remember { mutableStateOf(false) }
+    var appHintActionMessage by remember { mutableStateOf<String?>(null) }
     var lastAutoCheckTriggerAt by remember { mutableStateOf(0L) }
     var tileAdded by remember { mutableStateOf(AudioGuardApp.isTileAdded(context)) }
     var hasObservedDownloadState by rememberSaveable { mutableStateOf(false) }
@@ -164,10 +167,12 @@ private fun AudioGuardScreen() {
             publicProjectionInput = monitor.getPublicProjectionInput()
             fixLog = monitor.fixLog
             commDeviceName = monitor.getCommunicationDevice()?.productName?.toString() ?: "无"
+            relatedAppHint = monitor.getRelatedAppHint()
         } else {
             publicProjectionInput = defaultGuardPublicProjectionInput(enhancedEnabled)
             fixLog = emptyList()
             commDeviceName = "无"
+            relatedAppHint = null
         }
     }
 
@@ -395,6 +400,7 @@ private fun AudioGuardScreen() {
                     showPermissionWarning = PermissionChecker.checkAllPermissions(context).any { !it.isGranted }
                     tileAdded = AudioGuardApp.isTileAdded(context)
                     probeExistingTileIfNeeded()
+                    AudioGuardService.getMonitor()?.refreshRelatedAppHint()
                     refreshState()
                     requestAutomaticUpdateCheck(reason = "页面恢复")
                 }
@@ -411,11 +417,13 @@ private fun AudioGuardScreen() {
         val statusListener: (GuardStatus) -> Unit = { _ -> refreshState() }
         val fixLogListener: () -> Unit = { refreshState() }
         val enhancedStateListener: (EnhancedState) -> Unit = { refreshState() }
+        val relatedAppHintListener: () -> Unit = { refreshState() }
         val listener = object : AudioGuardService.OnServiceRebindListener {
             override fun onRebind(monitor: AudioRouteMonitor) {
                 monitor.addStatusListener(statusListener)
                 monitor.addFixLogListener(fixLogListener)
                 monitor.addEnhancedStateListener(enhancedStateListener)
+                monitor.addRelatedAppHintListener(relatedAppHintListener)
                 refreshState()
             }
         }
@@ -427,6 +435,7 @@ private fun AudioGuardScreen() {
             AudioGuardService.getMonitor()?.removeStatusListener(statusListener)
             AudioGuardService.getMonitor()?.removeFixLogListener(fixLogListener)
             AudioGuardService.getMonitor()?.removeEnhancedStateListener(enhancedStateListener)
+            AudioGuardService.getMonitor()?.removeRelatedAppHintListener(relatedAppHintListener)
         }
     }
 
@@ -486,6 +495,19 @@ private fun AudioGuardScreen() {
             text = { Text(message) },
             confirmButton = {
                 TextButton(onClick = { updateActionMessage = null }) {
+                    Text("关闭")
+                }
+            }
+        )
+    }
+
+    appHintActionMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { appHintActionMessage = null },
+            title = { Text("提示") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { appHintActionMessage = null }) {
                     Text("关闭")
                 }
             }
@@ -662,10 +684,30 @@ private fun AudioGuardScreen() {
                         }
                     }
 
-                    if (canManualReleaseHeldRoute) {
+                    if (canManualReleaseHeldRoute || relatedAppHint != null) {
                         SectionSurface(
                             title = "进一步处理"
                         ) {
+                            relatedAppHint?.let { hint ->
+                                RelatedAppHintCard(
+                                    hint = hint,
+                                    onOpenAppDetails = { packageName ->
+                                        if (!openApplicationDetails(context, packageName)) {
+                                            appHintActionMessage = "无法打开该应用的系统设置，请手动前往系统设置处理"
+                                        }
+                                    },
+                                    onOpenUsageAccessSettings = {
+                                        if (!openUsageAccessSettings(context)) {
+                                            appHintActionMessage = "无法打开应用使用情况访问设置，请手动前往系统设置处理"
+                                        }
+                                    }
+                                )
+                            }
+
+                            if (relatedAppHint != null && canManualReleaseHeldRoute) {
+                                HorizontalDivider()
+                            }
+
                             heldRouteMessage?.let { message ->
                                 MergedTextBlock {
                                     Text(
@@ -675,17 +717,20 @@ private fun AudioGuardScreen() {
                                     )
                                 }
                             }
-                            OutlinedButton(
-                                onClick = {
-                                    AudioGuardService.requestReleaseHeldRoute(context)
-                                    scope.launch {
-                                        delay(700)
-                                        refreshState()
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("尝试解除外放占用")
+
+                            if (canManualReleaseHeldRoute) {
+                                OutlinedButton(
+                                    onClick = {
+                                        AudioGuardService.requestReleaseHeldRoute(context)
+                                        scope.launch {
+                                            delay(700)
+                                            refreshState()
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("尝试解除外放占用")
+                                }
                             }
                         }
                     }
@@ -1018,6 +1063,80 @@ private fun enhancedStateToText(state: EnhancedState): String {
         EnhancedState.ACTIVE -> "增强保护中"
         EnhancedState.CLEAR_PROBE -> "观察中"
         EnhancedState.SUSPENDED_BY_CALL -> "通话暂停"
+    }
+}
+
+@Composable
+private fun RelatedAppHintCard(
+    hint: RelatedAppHint,
+    onOpenAppDetails: (String) -> Unit,
+    onOpenUsageAccessSettings: () -> Unit,
+) {
+    val projection = remember(hint) {
+        RelatedAppHintProjectionResolver.resolve(hint)
+    }
+    val onClickAction: (() -> Unit)? = remember(hint, onOpenAppDetails, onOpenUsageAccessSettings) {
+        when (hint.kind) {
+            RelatedAppHintKind.APP -> {
+                val packageName = hint.packageName
+                if (packageName == null) {
+                    null
+                } else {
+                    { onOpenAppDetails(packageName) }
+                }
+            }
+
+            RelatedAppHintKind.EVENT_ONLY -> null
+            RelatedAppHintKind.PERMISSION_REQUIRED -> onOpenUsageAccessSettings
+        }
+    }
+    val cardModifier = if (onClickAction != null && projection.onClickLabel != null) {
+        Modifier
+            .fillMaxWidth()
+            .clickable(
+                role = Role.Button,
+                onClickLabel = projection.onClickLabel,
+                onClick = onClickAction
+            )
+    } else {
+        Modifier.fillMaxWidth()
+    }
+
+    Surface(
+        modifier = cardModifier,
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            MergedTextBlock(
+                modifier = Modifier.weight(1f),
+                verticalSpacing = 4.dp
+            ) {
+                Text(
+                    projection.title,
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    projection.summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            projection.actionLabel?.let { actionLabel ->
+                Text(
+                    actionLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
     }
 }
 
@@ -1496,6 +1615,28 @@ private fun openGuardNotificationSettings(context: Context): Boolean {
         } catch (_: Exception) {
             false
         }
+    }
+}
+
+private fun openApplicationDetails(context: Context, packageName: String): Boolean {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.parse("package:$packageName")
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    return try {
+        context.startActivity(intent)
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun openUsageAccessSettings(context: Context): Boolean {
+    return try {
+        context.startActivity(UsageAccessPermissionResolver.createSettingsIntent())
+        true
+    } catch (_: Exception) {
+        false
     }
 }
 
