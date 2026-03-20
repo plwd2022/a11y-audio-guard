@@ -567,7 +567,7 @@ private fun AudioGuardScreen() {
         alertChannelBlocked = alertChannelBlocked
     )
     val toolsSubtitle = if (tileAdded) {
-        "控制中心磁贴已添加，可在通知栏快捷开启或关闭保护。"
+        "控制中心磁贴已添加，可直接在下拉快捷开关保护。"
     } else {
         null
     }
@@ -627,7 +627,7 @@ private fun AudioGuardScreen() {
                     ) {
                         MergedTextBlock {
                             Text(
-                                "还没有添加控制中心磁贴。添加后可在通知栏快捷开启或关闭保护，无需打开应用。",
+                                "还没添加控制中心磁贴。添加后可直接在下拉快捷开关保护，不用每次打开应用。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -742,12 +742,12 @@ private fun AudioGuardScreen() {
 
                 SectionSurface(
                     title = "高级与实验功能",
-                    subtitle = "一般情况下无需调整，只有普通保护不够时再尝试"
+                    subtitle = "一般不用改；只有普通保护不够稳时再试"
                 ) {
                     SettingsToggleRow(
                         checked = enhancedEnabled,
                         title = "增强保护（实验性）",
-                        summary = "开启后会更主动地接管可能影响读屏播报的声音路径，尽量不让其他应用抢走。这样通常更稳，但可能影响外放、部分语音场景，并可能造成蓝牙音质持续处于窄带音质或者出现音质损失",
+                        summary = "会更主动地把读屏声音拉回耳机，通常更稳。代价是可能影响外放、部分语音场景，也可能让经典蓝牙音质暂时变差。",
                         onToggle = { enabled ->
                             enhancedEnabled = enabled
                             AudioGuardApp.setEnhancedModeEnabled(context, enabled)
@@ -764,7 +764,7 @@ private fun AudioGuardScreen() {
                     SettingsToggleRow(
                         checked = classicBluetoothSoftGuardEnabled,
                         title = "经典蓝牙保真保护（建议开启）",
-                        summary = "仅对经典蓝牙耳机生效。建议打开，可提升蓝牙耳机体验。开启后会短时用静默无障碍音频确认真实出声设备，尽量减少误判和锁屏干扰",
+                        summary = "仅影响经典蓝牙耳机。建议开启，可减少误判和锁屏时的打扰，整体体验会更稳。",
                         onToggle = { enabled ->
                             classicBluetoothSoftGuardEnabled = enabled
                             AudioGuardApp.setClassicBluetoothSoftGuardEnabled(context, enabled)
@@ -781,7 +781,7 @@ private fun AudioGuardScreen() {
                     SettingsToggleRow(
                         checked = classicBluetoothWidebandEnabled,
                         title = "经典蓝牙更清晰通话音质（实验性）",
-                        summary = "仅对经典蓝牙耳机生效。第三方应用不释放蓝牙占用时，为了持续保护读屏声音，系统可能退到通话音质。开启后会尽量让这段通话音质更清晰；解除持续保护后会恢复正常",
+                        summary = "仅影响经典蓝牙耳机。持续保护期间系统有时会退到通话音质；开启后会尽量让这段音质更清晰，结束后恢复正常。",
                         onToggle = { enabled ->
                             classicBluetoothWidebandEnabled = enabled
                             AudioGuardApp.setClassicBluetoothWidebandEnabled(context, enabled)
@@ -814,7 +814,7 @@ private fun AudioGuardScreen() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "通知行为完全由系统通知频道决定。想减少打扰时，可在系统里关闭“读屏保护常驻提示”，并保留“读屏异常短提醒”。",
+                            "想少打扰，可以关掉“读屏保护常驻提示”，保留“读屏异常短提醒”。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -890,7 +890,7 @@ private fun AudioGuardScreen() {
                         }
                         MergedTextBlock {
                             Text(
-                                "应用启动后会静默自动检查更新，发现新版本时会自动提示。",
+                                "应用启动后会自动检查更新，有新版本时会提醒。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1072,19 +1072,19 @@ private fun guardNotificationSummary(
 ): String {
     return when {
         !notificationsEnabled ->
-            "系统已关闭本应用通知。常驻和短提醒当前都不会显示。"
+            "系统已关闭本应用通知，常驻提示和短提醒都不会显示。"
 
         !persistentChannelBlocked && !alertChannelBlocked ->
-            "当前仍显示常驻提示；若关闭常驻，异常和修复状态会改用短提醒。"
+            "当前会显示常驻提示。若想更安静，可关闭常驻并保留短提醒。"
 
         !persistentChannelBlocked ->
-            "当前仍显示常驻提示，但短提醒已在系统中关闭。若之后关闭常驻，将不会再显示异常和修复提醒。"
+            "当前只剩常驻提示。短提醒已关闭；如果再关常驻，异常时也不会提醒。"
 
         !alertChannelBlocked ->
-            "你已关闭常驻提示，当前会改用短提醒。这是更推荐的低打扰设置。"
+            "已关闭常驻提示，当前改用短提醒。这是更省打扰的设置。"
 
         else ->
-            "你已关闭常驻提示和短提醒，当前不会显示相关提醒。"
+            "常驻提示和短提醒都已关闭，当前不会有提醒。"
     }
 }
 
@@ -1227,34 +1227,30 @@ private fun AboutDialog(
             ) {
                 Text("问题背景", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Android 13 起，部分应用（如抖音、微信）在播放语音消息时" +
-                    "调用 setSpeakerphoneOn(true)，播放结束后未释放，" +
-                    "导致读屏语音被错误切到内置扬声器。TalkBack 等屏幕阅读器的声音因此可能误外放，" +
-                    "严重影响依赖耳机的视障用户。"
+                    "Android 13 起，部分应用在播放语音后可能不释放外放状态，" +
+                    "导致 TalkBack 等读屏声音误切到扬声器。对依赖耳机的用户来说，这会很影响使用。"
                 )
 
                 Text("工作原理", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "通过 OnCommunicationDeviceChangedListener 实时监听通信设备变更，" +
-                    "当检测到读屏声音可能被异常切换到内置扬声器且有耳机连接时，" +
-                    "自动调用 setCommunicationDevice() 将读屏声音优先拉回耳机。\n\n" +
-                    "支持设备类型：USB 耳机、有线耳机/耳麦、蓝牙 A2DP/SCO、BLE 音频设备。"
+                    "应用会持续监听通信设备变化；当检测到读屏声音被切到内置扬声器、" +
+                    "且耳机仍连接时，会尝试把声音优先拉回耳机。\n\n" +
+                    "支持 USB、有线、经典蓝牙和 BLE 耳机。"
                 )
 
                 HorizontalDivider()
 
                 Text("制作信息", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "本软件由平行世界plwd与AI编程软件共同制作\n" +
+                    "本软件由平行世界plwd与 AI 编程工具共同制作\n" +
                     "测试设备：Redmi K80 至尊版\n" +
                     "当前版本：$currentVersionName"
                 )
 
                 Text("开源协议", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "本项目基于 MIT License 开源。" +
-                    "您可以自由使用、复制、修改和分发，仅需保留版权声明。\n" +
-                    "本安装包已启用签名校验，未经授权的修改将无法运行。"
+                    "项目基于 MIT License 开源，可自由使用和修改，但需保留版权声明。\n" +
+                    "安装包已启用签名校验，未经授权的修改版本无法运行。"
                 )
 
                 HorizontalDivider()
@@ -1457,25 +1453,25 @@ private fun UpdateDownloadCard(
     val (title, subtitle, containerColor) = when (state) {
         is UpdateDownloadState.Pending -> Triple(
             "下载与安装",
-            "正在准备内置下载",
+            "正在准备下载",
             MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
         )
 
         is UpdateDownloadState.Downloading -> Triple(
             "下载与安装",
-            "更新包正在下载，进度会实时刷新",
+            "正在下载更新包",
             MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
         )
 
         is UpdateDownloadState.Completed -> Triple(
             "下载与安装",
-            "安装包已经准备好，可以直接安装",
+            "安装包已准备好，可以直接安装",
             MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
         )
 
         is UpdateDownloadState.Failed -> Triple(
             "下载与安装",
-            "内置下载失败，可直接重试或改用浏览器下载",
+            "下载失败，可重试或改用浏览器",
             MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
         )
 
@@ -1507,7 +1503,7 @@ private fun UpdateDownloadCard(
                     MergedTextBlock(verticalSpacing = 6.dp) {
                         Text("准备下载 ${state.updateInfo.latestVersionName}", style = MaterialTheme.typography.titleMedium)
                         Text(
-                            "内置下载任务已经创建，通常会很快开始。",
+                            "下载任务已创建，通常很快就会开始。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -1566,7 +1562,7 @@ private fun UpdateDownloadCard(
                             style = MaterialTheme.typography.bodySmall
                         )
                         Text(
-                            "安装成功后会自动清理旧安装包。",
+                            "安装完成后会自动清理旧安装包。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

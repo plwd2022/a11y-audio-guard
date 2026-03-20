@@ -97,7 +97,7 @@ fun PermissionGuideDialog(
                 pendingManualConfirmType = null
             },
             title = { Text(confirmTitle) },
-            text = { Text("是否已在系统设置中完成配置？") },
+            text = { Text("你已经在系统设置里完成配置了吗？") },
             confirmButton = {
                 TextButton(onClick = {
                     when (pendingManualConfirmType) {
@@ -120,7 +120,7 @@ fun PermissionGuideDialog(
                 TextButton(onClick = {
                     showManualConfirmDialog = false
                     pendingManualConfirmType = null
-                }) { Text("尚未完成") }
+                }) { Text("还没有") }
             }
         )
     }
@@ -153,7 +153,7 @@ fun PermissionGuideDialog(
                 Spacer(modifier = Modifier.height(8.dp))
                 
                 Text(
-                    text = "为确保读屏声音保护功能正常运行，需要以下权限：",
+                    text = "想让保护更稳定，建议先把下面几项配置好。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -208,8 +208,8 @@ fun PermissionGuideDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (showManufacturerGuide) "隐藏详细设置说明" 
-                        else "查看详细设置说明"
+                        if (showManufacturerGuide) "收起机型说明"
+                        else "查看机型说明"
                     )
                 }
                 
@@ -245,7 +245,7 @@ fun PermissionGuideDialog(
                         }
                         onDismiss()
                     }) {
-                        Text("手动确认")
+                        Text("我已设置")
                     }
                     
                     Spacer(modifier = Modifier.width(8.dp))
@@ -334,7 +334,7 @@ private fun PermissionItem(
             if (clickable) {
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (status.isGranted) "重新设置" else "去设置",
+                    text = if (status.isGranted) "重新设置" else "去处理",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (status.isGranted) contentColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.primary
                 )
@@ -372,7 +372,7 @@ fun PermissionWarningBar(
                 Spacer(modifier = Modifier.width(12.dp))
                 
                 Text(
-                    text = "缺少必要权限，点击配置",
+                    text = "还有必要权限未配置，点击处理",
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onErrorContainer

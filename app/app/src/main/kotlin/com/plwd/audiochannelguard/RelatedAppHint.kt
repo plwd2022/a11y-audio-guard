@@ -36,9 +36,9 @@ object RelatedAppHintProjectionResolver {
                 val behavior = input.behaviorSummary.orEmpty()
                 val time = formatTime(input.happenedAtMs)
                 val summary = if (input.active) {
-                    "$time $behavior。双击打开应用信息，可尝试结束运行。仅表示与异常时间高度接近，不代表已直接确认调用系统接口。"
+                    "$time $behavior。可打开应用信息进一步处理。这只是排查线索，不代表已直接确认。"
                 } else {
-                    "$time $behavior。当前如已恢复正常，可先忽略。仅表示与异常时间高度接近，不代表已直接确认调用系统接口。"
+                    "$time $behavior。若现在已恢复正常，可先忽略。这只是排查线索，不代表已直接确认。"
                 }
                 RelatedAppHintProjection(
                     title = displayName,
@@ -51,9 +51,9 @@ object RelatedAppHintProjectionResolver {
             RelatedAppHintKind.EVENT_ONLY -> {
                 val time = formatTime(input.happenedAtMs)
                 val summary = if (input.active) {
-                    "$time 已捕获到读屏声道异常，但当前前台应用未形成足够明确的线索。可继续复现后再观察相关应用线索。"
+                    "$time 已捕获到读屏声道异常，但当前还没有更明确的相关应用线索。可继续复现后再观察。"
                 } else {
-                    "$time 曾捕获到读屏声道异常，但当前前台应用未形成足够明确的线索。当前如已恢复正常，可先忽略。"
+                    "$time 曾捕获到读屏声道异常，但当前还没有更明确的相关应用线索。若现在已恢复正常，可先忽略。"
                 }
                 RelatedAppHintProjection(
                     title = "已发生异常",
@@ -64,7 +64,7 @@ object RelatedAppHintProjectionResolver {
             RelatedAppHintKind.PERMISSION_REQUIRED -> RelatedAppHintProjection(
                 title = "可能相关应用",
                 summary =
-                    "如需显示可能相关应用，请先开启“应用使用情况访问”。线索只会在异常发生时短时读取，并结合前台活动时间与音频设置权限做临时排查。",
+                    "如需显示可能相关应用，请先开启“应用使用情况访问”。应用只会在异常发生时短时读取线索，用于临时排查。",
                 actionLabel = "去设置",
                 onClickLabel = "打开应用使用情况访问设置"
             )

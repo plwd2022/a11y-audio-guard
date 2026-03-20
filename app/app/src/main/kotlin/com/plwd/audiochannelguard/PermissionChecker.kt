@@ -83,7 +83,7 @@ object PermissionChecker {
             type = PermissionType.BATTERY_OPTIMIZATION,
             isGranted = isGranted,
             title = "电池优化",
-            description = if (isGranted) "已允许后台运行" else "需要关闭电池优化，否则应用可能被系统杀死",
+            description = if (isGranted) "后台运行已放行" else "建议关闭电池优化，避免被系统清掉",
             actionIntent = if (isGranted) null else getBatteryOptimizationIntent(context)
         )
     }
@@ -105,7 +105,7 @@ object PermissionChecker {
             type = PermissionType.NOTIFICATION,
             isGranted = isGranted,
             title = "通知权限",
-            description = if (isGranted) "已授权" else "需要通知权限来显示前台服务状态",
+            description = if (isGranted) "已允许通知" else "需要通知权限来显示运行状态和提醒",
             actionIntent = if (isGranted) null else Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
             }
@@ -120,17 +120,17 @@ object PermissionChecker {
         val manufacturer = Manufacturer.current()
         val confirmed = AudioGuardApp.isAutoStartConfirmed(context)
         val description = if (confirmed) {
-            "已配置（手动确认）"
+            "已手动确认"
         } else {
             when (manufacturer) {
-                Manufacturer.XIAOMI -> "需要开启自启动权限，否则开机后无法自动启动"
-                Manufacturer.HUAWEI -> "需要手动允许自启动和后台活动"
-                Manufacturer.OPPO -> "需要允许自启动和后台运行"
-                Manufacturer.ONEPLUS -> "需要允许自启动和后台运行"
-                Manufacturer.VIVO -> "需要允许自启动"
-                Manufacturer.SAMSUNG -> "建议在电池设置中将应用设为不受限"
-                Manufacturer.MEIZU -> "需要允许自启动和后台管理"
-                Manufacturer.GOOGLE -> "建议关闭自适应电池对本应用的限制"
+                Manufacturer.XIAOMI -> "建议开启自启动，否则开机后可能不起效"
+                Manufacturer.HUAWEI -> "建议允许自启动和后台活动"
+                Manufacturer.OPPO -> "建议允许自启动和后台运行"
+                Manufacturer.ONEPLUS -> "建议允许自启动和后台运行"
+                Manufacturer.VIVO -> "建议允许自启动"
+                Manufacturer.SAMSUNG -> "建议把应用设为不受限"
+                Manufacturer.MEIZU -> "建议允许自启动和后台管理"
+                Manufacturer.GOOGLE -> "建议放宽自适应电池限制"
                 Manufacturer.OTHER -> "建议检查系统设置中的自启动权限"
             }
         }
@@ -152,17 +152,17 @@ object PermissionChecker {
         val manufacturer = Manufacturer.current()
         val confirmed = AudioGuardApp.isBgRestrictConfirmed(context)
         val description = if (confirmed) {
-            "已配置（手动确认）"
+            "已手动确认"
         } else {
             when (manufacturer) {
-                Manufacturer.XIAOMI -> "需要将省电策略设置为「无限制」"
-                Manufacturer.HUAWEI -> "需要允许后台活动"
-                Manufacturer.OPPO -> "需要允许后台运行"
-                Manufacturer.ONEPLUS -> "需要允许后台运行"
-                Manufacturer.VIVO -> "需要允许后台高耗电"
-                Manufacturer.SAMSUNG -> "建议将应用电池设置为「不受限制」"
-                Manufacturer.MEIZU -> "需要在电池管理中允许后台运行"
-                Manufacturer.GOOGLE -> "建议在电池设置中取消对本应用的限制"
+                Manufacturer.XIAOMI -> "建议把省电策略改为「无限制」"
+                Manufacturer.HUAWEI -> "建议允许后台活动"
+                Manufacturer.OPPO -> "建议允许后台运行"
+                Manufacturer.ONEPLUS -> "建议允许后台运行"
+                Manufacturer.VIVO -> "建议允许后台高耗电"
+                Manufacturer.SAMSUNG -> "建议把电池策略设为「不受限制」"
+                Manufacturer.MEIZU -> "建议在电池管理中允许后台运行"
+                Manufacturer.GOOGLE -> "建议取消对本应用的电池限制"
                 Manufacturer.OTHER -> "建议检查系统后台管理设置"
             }
         }

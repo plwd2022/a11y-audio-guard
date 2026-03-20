@@ -55,30 +55,30 @@ object GuardPublicProjectionResolver {
         headsetName: String?,
     ): String {
         if (!serviceRunning) {
-            return "开启后，如果读屏声音误外放，应用会自动把声音收回耳机。"
+            return "开启后，如果读屏声音误外放，应用会自动把声音拉回耳机。"
         }
 
         val namedHeadset = namedHeadset(headsetName)
         return when (status) {
             GuardStatus.NORMAL ->
                 if (namedHeadset != null) {
-                    "当前读屏声音正在 $namedHeadset 中，可继续正常使用。"
+                    "当前读屏声音在 $namedHeadset 中，保护正在后台运行。"
                 } else {
                     "保护已开启，正在后台观察读屏声音是否误外放。"
                 }
 
             GuardStatus.FIXED ->
                 if (namedHeadset != null) {
-                    "最近一次异常已经把读屏声音收回到 $namedHeadset。"
+                    "最近一次异常已处理，读屏声音已收回到 $namedHeadset。"
                 } else {
-                    "最近一次异常已经把读屏声音收回耳机。"
+                    "最近一次异常已处理，读屏声音已收回耳机。"
                 }
 
             GuardStatus.FIXED_BUT_SPEAKER_ROUTE ->
-                "读屏声音已经收回耳机，如当前听起来正常请忽略。"
+                "读屏声音已经收回耳机；如果现在听起来正常，可以先忽略。"
 
             GuardStatus.HIJACKED ->
-                "当前读屏声音可能仍在扬声器外放，如你现在确实听到外放，可立即修复。"
+                "读屏声音可能还在扬声器外放；如果你现在确实听到外放，可以立即修复。"
 
             GuardStatus.NO_HEADSET ->
                 "接入耳机后会自动开始保护。"
