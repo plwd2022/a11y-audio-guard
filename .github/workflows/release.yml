@@ -57,7 +57,7 @@ jobs:
           done
 
           if [[ -n "$PREVIOUS_TAG" ]]; then
-            CHANGELOG="$(git log --pretty=format:'- %s' "${PREVIOUS_TAG}..HEAD" | head -n 20)"
+            CHANGELOG="$(git log "${PREVIOUS_TAG}..HEAD" --pretty=format:'- %s' -n 20)"
           else
             CHANGELOG="$(git log --pretty=format:'- %s' -n 20)"
           fi
