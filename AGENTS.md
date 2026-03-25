@@ -246,3 +246,4 @@ The file `app/app/proguard-rules.pro` keeps all manifest-declared components:
 4. **Signature verification is mandatory** - The app will not function if the APK is re-signed
 5. **Foreground service requires notification** - Service must call `startForeground()` within 5 seconds
 6. **API 31+ only** - All audio APIs require Android 12 or higher
+7. **Directly request escalation for likely-privileged commands** - For commands such as Gradle builds, `git add`/`git commit`/`git push`, APK installation, or other operations that may require elevated permissions in this environment, request escalated execution immediately instead of first trying a non-escalated run.

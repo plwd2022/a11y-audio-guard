@@ -17,7 +17,7 @@ class GuardPublicProjectionResolverTest {
 
         assertEquals("保护已关闭", projection.statusTitle)
         assertEquals(
-            "开启后，如果读屏声音误外放，应用会自动把声音收回耳机。",
+            "开启后，如果读屏声音误外放，应用会自动把声音拉回耳机。",
             projection.statusSummary
         )
         assertFalse(projection.showQuickFixAction)
@@ -34,7 +34,7 @@ class GuardPublicProjectionResolverTest {
         )
 
         assertEquals("已将读屏声音收回耳机", projection.statusTitle)
-        assertEquals("最近一次异常已经把读屏声音收回到 骨传导耳机。", projection.statusSummary)
+        assertEquals("最近一次异常已处理，读屏声音已收回到 骨传导耳机。", projection.statusSummary)
         assertEquals("已将读屏声音收回到 骨传导耳机", projection.persistentNotificationText)
         assertEquals("已收回", projection.tileSubtitle)
     }
