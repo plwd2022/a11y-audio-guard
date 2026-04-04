@@ -90,21 +90,6 @@ class RelatedAppTracker(
             return
         }
 
-        if (
-            lastIncidentAtMs != 0L &&
-            currentHint?.kind == RelatedAppHintKind.PERMISSION_REQUIRED &&
-            UsageAccessPermissionResolver.isGranted(context)
-        ) {
-            val nextHint = resolveIncidentHint(lastIncidentAtMs, now)
-            if (nextHint == null) {
-                clearAll()
-                return
-            }
-            updateHint(nextHint)
-            scheduleTimeout(now)
-            return
-        }
-
         rebuildHint(now)
         scheduleTimeout(now)
     }
@@ -258,13 +243,30 @@ class RelatedAppTracker(
 
     private fun rebuildHint(now: Long) {
         val hint = currentHint ?: return
+        val refreshedHint = refreshedHintFor(now, hint) ?: run {
+            clearAll()
+            return
+        }
         val active = now < activeUntilMs
-        val nextHint = if (hint.active == active) {
-            hint
+        val nextHint = if (refreshedHint.active == active) {
+            refreshedHint
         } else {
-            hint.copy(active = active)
+            refreshedHint.copy(active = active)
         }
         updateHint(nextHint)
+    }
+
+    private fun refreshedHintFor(now: Long, current: RelatedAppHint): RelatedAppHint? {
+        if (lastIncidentAtMs == 0L) {
+            return current
+        }
+        if (!UsageAccessPermissionResolver.isGranted(context)) {
+            return current
+        }
+        if (current.kind == RelatedAppHintKind.APP) {
+            return current
+        }
+        return resolveIncidentHint(lastIncidentAtMs, now) ?: current
     }
 
     private fun scheduleTimeout(now: Long) {

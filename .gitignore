@@ -8,6 +8,7 @@
 
 # Gradle
 app/.gradle/
+app/gradle-user-home/
 app/build/
 app/app/build/
 app/local.properties
