@@ -36,8 +36,11 @@ class RelatedAppTracker(
     private data class ActivityState(
         val packageName: String,
         val appLabel: String,
+        val hasModifyAudioSettings: Boolean,
         val lastResumedAtMs: Long = 0L,
         val lastBackgroundAtMs: Long = 0L,
+        val lastForegroundServiceStartedAtMs: Long = 0L,
+        val lastForegroundServiceStoppedAtMs: Long = 0L,
     )
 
     companion object {
@@ -149,10 +152,7 @@ class RelatedAppTracker(
 
     private fun resolveBestCandidate(observedAtMs: Long): Candidate? {
         val lookbackWindowMs = RelatedAppEvidenceResolver.currentForegroundLookbackWindowMs()
-        val usageEvents = usageStatsManager.queryEvents(
-            maxOf(0L, observedAtMs - lookbackWindowMs),
-            observedAtMs
-        )
+        val usageEvents = queryUsageEvents(observedAtMs, lookbackWindowMs) ?: return null
         val ignoredPackages = resolveIgnoredPackages()
         val activityStates = linkedMapOf<String, ActivityState>()
         val event = UsageEvents.Event()
@@ -165,15 +165,20 @@ class RelatedAppTracker(
                         continue
                     }
                     val metadata = resolvePackageMetadata(packageName) ?: continue
-                    if (metadata.isSystem || !metadata.hasModifyAudioSettings) {
+                    if (metadata.isSystem) {
                         continue
                     }
                     val current = activityStates[packageName]
                     activityStates[packageName] = ActivityState(
                         packageName = packageName,
                         appLabel = metadata.appLabel,
+                        hasModifyAudioSettings = metadata.hasModifyAudioSettings,
                         lastResumedAtMs = event.timeStamp,
                         lastBackgroundAtMs = current?.lastBackgroundAtMs ?: 0L,
+                        lastForegroundServiceStartedAtMs =
+                            current?.lastForegroundServiceStartedAtMs ?: 0L,
+                        lastForegroundServiceStoppedAtMs =
+                            current?.lastForegroundServiceStoppedAtMs ?: 0L,
                     )
                 }
 
@@ -182,6 +187,35 @@ class RelatedAppTracker(
                     val current = activityStates[packageName] ?: continue
                     activityStates[packageName] = current.copy(
                         lastBackgroundAtMs = maxOf(current.lastBackgroundAtMs, event.timeStamp)
+                    )
+                }
+
+                UsageEvents.Event.FOREGROUND_SERVICE_START -> {
+                    if (shouldIgnorePackage(packageName, ignoredPackages)) {
+                        continue
+                    }
+                    val metadata = resolvePackageMetadata(packageName) ?: continue
+                    if (metadata.isSystem) {
+                        continue
+                    }
+                    val current = activityStates[packageName]
+                    activityStates[packageName] = ActivityState(
+                        packageName = packageName,
+                        appLabel = metadata.appLabel,
+                        hasModifyAudioSettings = metadata.hasModifyAudioSettings,
+                        lastResumedAtMs = current?.lastResumedAtMs ?: 0L,
+                        lastBackgroundAtMs = current?.lastBackgroundAtMs ?: 0L,
+                        lastForegroundServiceStartedAtMs = event.timeStamp,
+                        lastForegroundServiceStoppedAtMs =
+                            current?.lastForegroundServiceStoppedAtMs ?: 0L,
+                    )
+                }
+
+                UsageEvents.Event.FOREGROUND_SERVICE_STOP -> {
+                    val current = activityStates[packageName] ?: continue
+                    activityStates[packageName] = current.copy(
+                        lastForegroundServiceStoppedAtMs =
+                            maxOf(current.lastForegroundServiceStoppedAtMs, event.timeStamp)
                     )
                 }
             }
@@ -199,23 +233,37 @@ class RelatedAppTracker(
     }
 
     private fun buildCandidate(state: ActivityState, observedAtMs: Long): Candidate? {
-        if (state.lastResumedAtMs == 0L) {
+        if (state.lastResumedAtMs == 0L && state.lastForegroundServiceStartedAtMs == 0L) {
             return null
         }
 
         val evidence = RelatedAppEvidenceResolver.resolve(
             RelatedAppEvidenceInput(
-                resumeDeltaMs = observedAtMs - state.lastResumedAtMs,
+                resumeDeltaMs = state.lastResumedAtMs.takeIf { it != 0L }?.let { observedAtMs - it },
                 isForegroundAtIncident = state.lastResumedAtMs > state.lastBackgroundAtMs,
+                foregroundServiceStartDeltaMs =
+                    state.lastForegroundServiceStartedAtMs
+                        .takeIf { it != 0L }
+                        ?.let { observedAtMs - it },
+                isForegroundServiceRunningAtIncident =
+                    state.lastForegroundServiceStartedAtMs > state.lastForegroundServiceStoppedAtMs,
+                declaresModifyAudioSettings = state.hasModifyAudioSettings,
             )
         ) ?: return null
 
-        val hasForegroundEvidence = state.lastResumedAtMs > state.lastBackgroundAtMs
+        val hasForegroundEvidence =
+            state.lastResumedAtMs > state.lastBackgroundAtMs ||
+                state.lastForegroundServiceStartedAtMs > state.lastForegroundServiceStoppedAtMs
         return Candidate(
             packageName = state.packageName,
             appLabel = state.appLabel,
             score = evidence.score,
-            matchedAtMs = if (hasForegroundEvidence) observedAtMs else state.lastResumedAtMs,
+            matchedAtMs =
+                if (hasForegroundEvidence) {
+                    observedAtMs
+                } else {
+                    maxOf(state.lastResumedAtMs, state.lastForegroundServiceStartedAtMs)
+                },
             behaviorSummary = evidence.behaviorSummary,
             hasForegroundEvidence = hasForegroundEvidence,
         )
@@ -239,6 +287,17 @@ class RelatedAppTracker(
             DISPLAY_SCORE_MARGIN
         }
         return best.score >= second.score + margin
+    }
+
+    private fun queryUsageEvents(observedAtMs: Long, lookbackWindowMs: Long): UsageEvents? {
+        return try {
+            usageStatsManager.queryEvents(
+                maxOf(0L, observedAtMs - lookbackWindowMs),
+                observedAtMs
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun rebuildHint(now: Long) {
