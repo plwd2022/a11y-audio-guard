@@ -1,10 +1,13 @@
 package com.plwd.audiochannelguard
 
 import android.app.Application
+import android.app.NotificationManager
+import android.app.Service
 import android.media.AudioDeviceInfo
 import android.media.AudioAttributes
 import android.media.AudioManager
 import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import org.junit.After
 import org.junit.Assert.*
@@ -12,7 +15,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Robolectric
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.Implementation
 import org.robolectric.annotation.Implements
@@ -20,6 +25,8 @@ import org.robolectric.annotation.LooperMode
 import org.robolectric.shadow.api.Shadow
 import org.robolectric.shadows.AudioDeviceInfoBuilder
 import org.robolectric.shadows.ShadowAudioManager
+import org.robolectric.shadows.ShadowSystemClock
+import java.time.Duration
 import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
@@ -53,6 +60,81 @@ class AudioRoutingRegressionTest {
         audio.dispatchRouteChanged()
         monitor.getStatus()
         assertEquals(0, audio.requests)
+    }
+
+    @Test fun `stale speaker callback does not reclaim an already restored headset`() {
+        val headset = device(1, AudioDeviceInfo.TYPE_WIRED_HEADSET, "usb")
+        val oldSpeaker = device(2, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, "speaker")
+        audio.outputs = listOf(headset)
+        audio.available = listOf(headset)
+        audio.route = headset
+        audio.dispatchRouteChanged(oldSpeaker)
+        monitor.getStatus()
+        assertEquals(0, audio.requests)
+    }
+
+    @Test fun `late monitor callbacks cannot repost notifications after service destruction`() {
+        val app = RuntimeEnvironment.getApplication()
+        AudioGuardApp.setGuardEnabledSync(app, true)
+        val controller = Robolectric.buildService(AudioGuardService::class.java).create()
+        val service = controller.get()
+        @Suppress("UNCHECKED_CAST")
+        val lateCallback = AudioGuardService::class.java.getDeclaredField("monitorStatusListener")
+            .apply { isAccessible = true }.get(service) as (GuardStatus) -> Unit
+        try {
+            AudioGuardService.getMonitor()!!.getStatus()
+        } finally {
+            controller.destroy()
+        }
+        val notifications = app.getSystemService(NotificationManager::class.java)
+        notifications.cancel(AudioGuardService.PERSISTENT_NOTIFICATION_ID)
+        lateCallback(GuardStatus.HIJACKED)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNull(shadowOf(notifications).getNotification(AudioGuardService.PERSISTENT_NOTIFICATION_ID))
+    }
+
+    @Test fun `disabled guard cannot be resurrected by a delayed service start`() {
+        val app = RuntimeEnvironment.getApplication()
+        AudioGuardApp.setGuardEnabledSync(app, false)
+        val controller = Robolectric.buildService(AudioGuardService::class.java).create()
+        try {
+            assertFalse(AudioGuardService.isRunning())
+            assertNull(AudioGuardService.getMonitor())
+            assertEquals(Service.START_NOT_STICKY, controller.get().onStartCommand(null, 0, 1))
+        } finally {
+            controller.destroy()
+        }
+    }
+
+    @Test fun `wideband retry does not modify a route that this monitor no longer owns`() {
+        val headset = device(1, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, "bluetooth")
+        audio.route = headset
+        monitor.setClassicBluetoothWidebandEnabled(true)
+        val handler = AudioRouteMonitor::class.java.getDeclaredField("handler")
+            .apply { isAccessible = true }.get(monitor) as Handler
+        val retry = AudioRouteMonitor::class.java.getDeclaredMethod(
+            "retryClassicBluetoothWidebandHint", AudioDeviceInfo::class.java, Long::class.javaPrimitiveType,
+        ).apply { isAccessible = true }
+        handler.post { retry.invoke(monitor, headset, 250L) }
+        monitor.getStatus()
+        assertEquals(0, audio.parameterWrites)
+    }
+
+    @Test fun `disabling and reenabling wideband does not revive earlier retries`() {
+        val headset = device(1, AudioDeviceInfo.TYPE_BLUETOOTH_SCO, "bluetooth")
+        audio.outputs = listOf(headset)
+        audio.available = listOf(headset)
+        audio.route = device(2, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, "speaker")
+        monitor.setClassicBluetoothWidebandEnabled(true)
+        assertTrue(monitor.fixNow())
+        assertEquals(1, audio.parameterWrites)
+        audio.route = headset
+        monitor.setClassicBluetoothWidebandEnabled(false)
+        monitor.setClassicBluetoothWidebandEnabled(true)
+        monitor.getStatus()
+        ShadowSystemClock.advanceBy(Duration.ofMillis(1500))
+        monitor.getStatus()
+        assertEquals(1, audio.parameterWrites)
     }
 
     @Test fun `does not switch to unrelated communication headset`() {
@@ -231,6 +313,7 @@ class AudioRoutingRegressionTest {
         var route: AudioDeviceInfo? = null
         var predicted = emptyList<AudioDeviceInfo>()
         var requests = 0
+        var parameterWrites = 0
         var clears = 0
         var routeReads = 0
         var requestedDevice: AudioDeviceInfo? = null
@@ -249,6 +332,7 @@ class AudioRoutingRegressionTest {
             return true
         }
         @Implementation override fun clearCommunicationDevice() { clears++ }
+        @Implementation override fun setParameters(parameters: String) { parameterWrites++ }
         @Implementation fun addOnCommunicationDeviceChangedListener(executor: Executor, listener: AudioManager.OnCommunicationDeviceChangedListener) {
             routeListeners.add(executor to listener)
         }
@@ -265,8 +349,8 @@ class AudioRoutingRegressionTest {
             super.setMode(mode)
             modeListeners.toList().forEach { (executor, listener) -> executor.execute { listener.onModeChanged(mode) } }
         }
-        fun dispatchRouteChanged() {
-            routeListeners.toList().forEach { (executor, listener) -> executor.execute { listener.onCommunicationDeviceChanged(route) } }
+        fun dispatchRouteChanged(changedDevice: AudioDeviceInfo? = route) {
+            routeListeners.toList().forEach { (executor, listener) -> executor.execute { listener.onCommunicationDeviceChanged(changedDevice) } }
         }
     }
 }

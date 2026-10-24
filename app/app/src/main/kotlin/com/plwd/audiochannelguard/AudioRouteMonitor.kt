@@ -129,6 +129,7 @@ class AudioRouteMonitor(private val context: Context) {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val monitorThread = HandlerThread("AudioRouteMonitor").apply { start() }
     private val handler = Handler(monitorThread.looper)
+    private val widebandRetryToken = Any()
     private val callbackExecutor = Executor { runnable ->
         handler.post(runnable)
     }
@@ -336,6 +337,8 @@ class AudioRouteMonitor(private val context: Context) {
         AudioManager.OnCommunicationDeviceChangedListener { device ->
             Log.i(TAG, "Communication device changed: type=${device?.type} name=${device?.productName}")
             if (!running || shouldSuspendForCall(audioManager.mode)) return@OnCommunicationDeviceChangedListener
+            // Delivery can lag behind a newer route change on the monitor executor.
+            if (device?.id != audioManager.communicationDevice?.id) return@OnCommunicationDeviceChangedListener
             val headset = findConnectedHeadset()
             if (headset == null) {
                 clearBuiltinRouteEvidence()
@@ -2140,13 +2143,14 @@ class AudioRouteMonitor(private val context: Context) {
         CLASSIC_BLUETOOTH_WIDEBAND_RETRY_DELAYS_MS.forEach { delayMs ->
             handler.postDelayed({
                 retryClassicBluetoothWidebandHint(targetDevice, delayMs)
-            }, delayMs)
+            }, widebandRetryToken, delayMs)
         }
     }
 
     private fun retryClassicBluetoothWidebandHint(targetDevice: AudioDeviceInfo, delayMs: Long) {
         if (
             !running ||
+            !guardOwnsCommunicationDevice ||
             !classicBluetoothState.wideband.enabled ||
             !isClassicBluetoothDevice(targetDevice) ||
             shouldSuspendForCall(audioManager.mode)
@@ -2204,6 +2208,7 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun clearClassicBluetoothWidebandAttempts() {
+        handler.removeCallbacksAndMessages(widebandRetryToken)
         if (classicBluetoothState.wideband.attemptTimesMs.isEmpty()) {
             return
         }
@@ -2214,6 +2219,7 @@ class AudioRouteMonitor(private val context: Context) {
     }
 
     private fun clearCommunicationDeviceSafely() {
+        handler.removeCallbacksAndMessages(widebandRetryToken)
         pendingRestoreDevice = null
         lastRestoreAttemptDeviceKey = null
         lastRestoreRequestAccepted = false

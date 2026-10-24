@@ -176,10 +176,15 @@ class AudioGuardService : Service() {
             stopSelf()
             return
         }
+        val guardEnabled = AudioGuardApp.isGuardEnabled(this)
         startForeground(
             PERSISTENT_NOTIFICATION_ID,
-            buildPersistentNotification("正在保护读屏声音")
+            buildPersistentNotification(if (guardEnabled) "正在保护读屏声音" else "读屏声音保护已关闭")
         )
+        if (!guardEnabled) {
+            stopSelf()
+            return
+        }
         alertController = GuardStatusAlertController(this)
 
         monitor = AudioRouteMonitor(this)
@@ -197,6 +202,7 @@ class AudioGuardService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         if (::alertController.isInitialized) {
             alertController.clear()
         } else {
@@ -207,7 +213,6 @@ class AudioGuardService : Service() {
             monitor.removeEnhancedStateListener(monitorEnhancedStateListener)
             monitor.stop()
         }
-        instance = null
         AudioFixTile.requestTileRefresh(this)
         super.onDestroy()
     }
@@ -222,6 +227,10 @@ class AudioGuardService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (AudioGuardApp.isTampered || !AudioGuardApp.isGuardEnabled(this)) {
+            stopSelf(startId)
+            return START_NOT_STICKY
+        }
         if (::monitor.isInitialized &&
             intent?.action == ACTION_TRY_RELEASE_HELD_ROUTE
         ) {
@@ -232,6 +241,7 @@ class AudioGuardService : Service() {
     }
 
     private fun refreshNotifications(status: GuardStatus? = null) {
+        if (instance !== this) return
         val notificationSnapshotInputs = monitor.getNotificationSnapshotInputs(status)
         val publicProjectionInput = notificationSnapshotInputs.publicProjectionInput
         val publicProjection = GuardPublicProjectionResolver.resolve(
