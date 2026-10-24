@@ -11,6 +11,8 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
+internal enum class GuardServiceStartResult { STARTED, BACKGROUND_RESTRICTED, FAILED }
+
 class AudioGuardService : Service() {
 
     companion object {
@@ -18,11 +20,12 @@ class AudioGuardService : Service() {
         const val ALERT_CHANNEL_ID = "audio_guard_alert_channel"
         const val PERSISTENT_NOTIFICATION_ID = 1
         const val ALERT_NOTIFICATION_ID = 2
+        private const val RESTART_NOTIFICATION_ID = 3
         private const val TAG = "AudioGuardService"
         const val ACTION_TRY_RELEASE_HELD_ROUTE =
             "com.plwd.audiochannelguard.action.TRY_RELEASE_HELD_ROUTE"
 
-        private var instance: AudioGuardService? = null
+        @Volatile private var instance: AudioGuardService? = null
         private val rebindListeners = mutableListOf<OnServiceRebindListener>()
 
         fun isRunning(): Boolean = instance != null
@@ -38,15 +41,20 @@ class AudioGuardService : Service() {
         }
 
         fun start(context: Context): Boolean {
+            return startServiceSafely(context) == GuardServiceStartResult.STARTED
+        }
+
+        internal fun startForRecovery(context: Context): GuardServiceStartResult {
             return startServiceSafely(context)
         }
 
         fun stop(context: Context) {
+            cancelRestartNotification(context)
             context.stopService(Intent(context, AudioGuardService::class.java))
         }
 
         fun requestReleaseHeldRoute(context: Context): Boolean {
-            return startServiceSafely(context, ACTION_TRY_RELEASE_HELD_ROUTE)
+            return startServiceSafely(context, ACTION_TRY_RELEASE_HELD_ROUTE) == GuardServiceStartResult.STARTED
         }
 
         fun refreshNotifications() {
@@ -88,23 +96,49 @@ class AudioGuardService : Service() {
             )
         }
 
-        private fun startServiceSafely(context: Context, action: String? = null): Boolean {
+        internal fun showRestartRequiredNotification(context: Context) {
+            if (!AudioGuardApp.isGuardEnabled(context) || isRunning()) return
+            val pendingIntent = PendingIntent.getActivity(
+                context, 3, Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val notification = NotificationCompat.Builder(context, PERSISTENT_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_headset)
+                .setContentTitle("读屏声音保护已停止")
+                .setContentText("系统未允许后台恢复，点击打开应用恢复保护")
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .build()
+            try {
+                context.getSystemService(NotificationManager::class.java)
+                    .notify(RESTART_NOTIFICATION_ID, notification)
+            } catch (exception: SecurityException) {
+                Log.w(TAG, "Restart notification permission denied", exception)
+            }
+        }
+
+        private fun cancelRestartNotification(context: Context) {
+            context.getSystemService(NotificationManager::class.java).cancel(RESTART_NOTIFICATION_ID)
+        }
+
+        private fun startServiceSafely(context: Context, action: String? = null): GuardServiceStartResult {
             val appContext = context.applicationContext
             val intent = Intent(appContext, AudioGuardService::class.java).apply {
                 this.action = action
             }
             return try {
                 appContext.startForegroundService(intent)
-                true
+                GuardServiceStartResult.STARTED
             } catch (exception: ForegroundServiceStartNotAllowedException) {
                 Log.w(TAG, "Foreground service start not allowed: action=$action", exception)
-                false
+                GuardServiceStartResult.BACKGROUND_RESTRICTED
             } catch (exception: IllegalStateException) {
                 Log.w(TAG, "Foreground service start failed: action=$action", exception)
-                false
+                GuardServiceStartResult.FAILED
             } catch (exception: SecurityException) {
                 Log.w(TAG, "Foreground service start blocked by security policy: action=$action", exception)
-                false
+                GuardServiceStartResult.BACKGROUND_RESTRICTED
             }
         }
 
@@ -132,6 +166,7 @@ class AudioGuardService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        cancelRestartNotification(this)
         if (AudioGuardApp.isTampered) {
             startForeground(
                 PERSISTENT_NOTIFICATION_ID,
@@ -141,7 +176,10 @@ class AudioGuardService : Service() {
             stopSelf()
             return
         }
-        instance = this
+        startForeground(
+            PERSISTENT_NOTIFICATION_ID,
+            buildPersistentNotification("正在保护读屏声音")
+        )
         alertController = GuardStatusAlertController(this)
 
         monitor = AudioRouteMonitor(this)
@@ -151,10 +189,7 @@ class AudioGuardService : Service() {
         monitor.addStatusListener(monitorStatusListener)
         monitor.addEnhancedStateListener(monitorEnhancedStateListener)
 
-        startForeground(
-            PERSISTENT_NOTIFICATION_ID,
-            buildPersistentNotification("正在保护读屏声音")
-        )
+        instance = this
         monitor.start()
         refreshNotifications()
         AudioFixTile.requestTileRefresh(this)
@@ -196,7 +231,7 @@ class AudioGuardService : Service() {
         return START_STICKY
     }
 
-    private fun refreshNotifications(status: GuardStatus = monitor.getStatus()) {
+    private fun refreshNotifications(status: GuardStatus? = null) {
         val notificationSnapshotInputs = monitor.getNotificationSnapshotInputs(status)
         val publicProjectionInput = notificationSnapshotInputs.publicProjectionInput
         val publicProjection = GuardPublicProjectionResolver.resolve(

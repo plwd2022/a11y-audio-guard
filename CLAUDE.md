@@ -21,11 +21,14 @@ cd app
 # Release build (requires signing env vars: SIGNING_STORE_FILE, SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, SIGNING_KEY_PASSWORD)
 ./gradlew assembleRelease
 
-# Clean
-./gradlew clean
+# Unit tests
+./gradlew test
+
+# Lint
+./gradlew lint
 ```
 
-There are no tests configured in this project.
+Unit tests live under `app/app/src/test/` (JVM resolvers and Robolectric API 31/33). Keep `unitTests.isIncludeAndroidResources = true` and verify zero skipped tests; otherwise Robolectric can silently skip modern Android SDK tests.
 
 ### Signing alternatives
 

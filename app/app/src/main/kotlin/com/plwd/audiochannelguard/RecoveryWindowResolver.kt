@@ -28,7 +28,28 @@ internal data class RecoveryWindowDecision(
     val nextStableHitCount: Int,
 )
 
+internal data class RecoveryTimeoutRetryInput(
+    val hasHeadset: Boolean,
+    val hasCommunicationHeadset: Boolean,
+    val communicationDeviceMatchesHeadset: Boolean,
+)
+
+internal enum class RecoveryTimeoutRetryOutcome {
+    SKIP,
+    CLEAR_THEN_RESTORE,
+}
+
 internal object RecoveryWindowResolver {
+    fun resolveTimeoutRetry(input: RecoveryTimeoutRetryInput): RecoveryTimeoutRetryOutcome {
+        if (!input.hasHeadset || !input.hasCommunicationHeadset) {
+            return RecoveryTimeoutRetryOutcome.SKIP
+        }
+        if (input.communicationDeviceMatchesHeadset) {
+            return RecoveryTimeoutRetryOutcome.SKIP
+        }
+        return RecoveryTimeoutRetryOutcome.CLEAR_THEN_RESTORE
+    }
+
     fun resolve(input: RecoveryWindowDecisionInput): RecoveryWindowDecision {
         if (input.timedOut) {
             return RecoveryWindowDecision(

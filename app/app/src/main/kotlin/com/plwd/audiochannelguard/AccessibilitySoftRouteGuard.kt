@@ -16,11 +16,6 @@ class AccessibilitySoftRouteGuard(
     private val onRoutedDeviceChanged: (AudioDeviceInfo?) -> Unit,
 ) {
 
-    enum class RoutingMode {
-        OBSERVE,
-        PINNED,
-    }
-
     companion object {
         private const val TAG = "AccessibilitySoftRouteGuard"
         private const val SAMPLE_RATE_HZ = 48_000
@@ -38,38 +33,29 @@ class AccessibilitySoftRouteGuard(
 
     private var track: AudioTrack? = null
     private var targetDevice: AudioDeviceInfo? = null
-    private var routingMode = RoutingMode.OBSERVE
     private var writerThread: Thread? = null
 
     private val routingChangedListener = AudioRouting.OnRoutingChangedListener { routing ->
-        val routedDevice = (routing as? AudioTrack)?.routedDevice
+        val currentTrack = routing as? AudioTrack ?: return@OnRoutingChangedListener
         callbackHandler.post {
-            if (running) {
-                onRoutedDeviceChanged(routedDevice)
+            if (synchronized(lock) { running && track === currentTrack }) {
+                onRoutedDeviceChanged(currentTrack.routedDevice)
             }
         }
     }
 
-    fun startOrUpdate(
-        device: AudioDeviceInfo,
-        mode: RoutingMode,
-    ): Boolean {
+    fun startOrUpdate(device: AudioDeviceInfo): Boolean {
         synchronized(lock) {
             val currentTrack = track
             if (running && currentTrack != null) {
                 targetDevice = device
-                routingMode = mode
-                applyRoutingMode(currentTrack, device, mode)
                 dispatchCurrentRoute(currentTrack)
                 return true
             }
 
             val createdTrack = createTrack() ?: return false
-            targetDevice = device
-            routingMode = mode
             try {
                 createdTrack.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
-                applyRoutingMode(createdTrack, device, mode)
                 createdTrack.setVolume(KEEP_ALIVE_VOLUME)
                 createdTrack.play()
             } catch (exception: IllegalStateException) {
@@ -84,6 +70,7 @@ class AccessibilitySoftRouteGuard(
 
             running = true
             track = createdTrack
+            targetDevice = device
             startWriterThread(createdTrack)
             dispatchCurrentRoute(createdTrack)
             return true
@@ -101,20 +88,17 @@ class AccessibilitySoftRouteGuard(
             track = null
             writerThread = null
             targetDevice = null
-            routingMode = RoutingMode.OBSERVE
         }
 
         currentThread?.interrupt()
         releaseTrack(currentTrack)
     }
 
-    fun isRunning(): Boolean = running && track != null
+    fun isRunning(): Boolean = synchronized(lock) { running && track != null }
 
     fun getTargetDevice(): AudioDeviceInfo? = synchronized(lock) { targetDevice }
 
     fun getRoutedDevice(): AudioDeviceInfo? = synchronized(lock) { track?.routedDevice }
-
-    fun getRoutingMode(): RoutingMode = synchronized(lock) { routingMode }
 
     private fun createTrack(): AudioTrack? {
         return try {
@@ -159,8 +143,8 @@ class AccessibilitySoftRouteGuard(
                 Process.setThreadPriority(Process.THREAD_PRIORITY_AUDIO)
             } catch (_: RuntimeException) {
             }
-            while (running && !Thread.currentThread().isInterrupted) {
-                try {
+            try {
+                while (running && !Thread.currentThread().isInterrupted) {
                     val written = currentTrack.write(
                         silenceBuffer,
                         0,
@@ -168,12 +152,24 @@ class AccessibilitySoftRouteGuard(
                         AudioTrack.WRITE_BLOCKING
                     )
                     if (written < 0) {
+                        Log.w(TAG, "Probe write failed: $written")
                         break
                     }
-                } catch (_: IllegalStateException) {
-                    break
-                } catch (_: RuntimeException) {
-                    break
+                    if (written == 0) Thread.sleep(10)
+                }
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (exception: RuntimeException) {
+                Log.w(TAG, "Probe writer stopped", exception)
+            } finally {
+                synchronized(lock) {
+                    if (track === currentTrack) {
+                        running = false
+                        track = null
+                        writerThread = null
+                        targetDevice = null
+                        releaseTrack(currentTrack)
+                    }
                 }
             }
         }, "AccessibilitySoftRouteGuard")
@@ -200,22 +196,10 @@ class AccessibilitySoftRouteGuard(
         currentTrack.release()
     }
 
-    private fun applyRoutingMode(
-        currentTrack: AudioTrack,
-        device: AudioDeviceInfo,
-        mode: RoutingMode,
-    ) {
-        when (mode) {
-            RoutingMode.OBSERVE -> currentTrack.setPreferredDevice(null)
-            RoutingMode.PINNED -> currentTrack.setPreferredDevice(device)
-        }
-    }
-
     private fun dispatchCurrentRoute(currentTrack: AudioTrack) {
-        val routedDevice = currentTrack.routedDevice
         callbackHandler.post {
-            if (running) {
-                onRoutedDeviceChanged(routedDevice)
+            if (synchronized(lock) { running && track === currentTrack }) {
+                onRoutedDeviceChanged(currentTrack.routedDevice)
             }
         }
     }

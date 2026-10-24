@@ -71,6 +71,13 @@ private const val AUTO_UPDATE_TRIGGER_DEBOUNCE_MS = 10_000L
 
 class MainActivity : ComponentActivity() {
 
+    override fun onResume() {
+        super.onResume()
+        if (!AudioGuardApp.isTampered && AudioGuardApp.isGuardEnabled(this) && !AudioGuardService.isRunning()) {
+            AudioGuardService.start(this)
+        }
+    }
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ -> }

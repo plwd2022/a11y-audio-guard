@@ -9,6 +9,19 @@
 
 目标不是替代源码，而是把“状态、触发条件、副作用”收束成一份可核对文档，方便后续继续重构时判断行为是否被改变。
 
+补充（近期行为）：
+
+- `OnModeChangedListener` 在 `start()` 时无条件注册（不再仅增强模式）；其他应用的 `MODE_IN_COMMUNICATION` 可能来自正常网络通话，也可能是残留，不能仅凭模式判定故障。
+- 恢复观察窗口超时后，若回读 `communicationDevice` 仍不匹配耳机，会 `clearCommunicationDevice()` + 强制重试一次，并在延迟回读后诚实上报 `RESTORE_FAILED`。
+- `fixNow()` 绕过 350ms 恢复去抖（`force = true`），避免手动修复被静默失败的上一次请求短路。
+- 电话、振铃和来电筛选模式下，普通和增强模式都会停止恢复任务；公共切换入口及轮询也检查电话模式。退出电话模式后重新观察路由。普通应用无法仅凭全局模式识别其他应用的所有 VoIP 通话。
+- 超时重试的延迟验证在增强配置变化、手动修复/归还、设备变化、进入电话模式和停止守护时取消。验证还需满足目标设备仍在、当前没有其他观察任务等条件。
+- 所有短时观察窗口和蓝牙宽带提示冷却使用 `SystemClock.elapsedRealtime()`；事件日志仍使用墙上时间。
+- `setCommunicationDevice()` 返回 `true` 只记录 `RESTORE_ACCEPTED`；回调与回读匹配，或稳定性观察确认后，才记录 `RESTORE_SUCCEEDED`。这确认的是通信路由，并不直接证明 TalkBack 的实际出声设备。
+- 多设备时优先使用当前通信耳机或已有目标；Android 13+ 的 `getAudioDevicesForAttributes()` 仅辅助选择初始目标。指定耳机找不到对应通信设备时，不退回另一副不匹配的耳机。
+- 静音音轨写入失败会释放并清空当前会话，后续启动可重建音轨；旧会话的线程或回调不能清理、更新新会话。
+- WorkManager 恢复是尽力而为：后台启动被限制时提示用户打开应用恢复，其他启动错误最多重试三次。通知权限被关闭时无法显示该提示，用户打开应用仍会尝试恢复已启用的保护。
+
 ---
 
 ## 1. `PollingMode`
@@ -65,6 +78,7 @@ RELEASE_PROBE
 | `CLEAR_PROBE` | 系统自动恢复到耳机 | `IDLE` | 退出增强清空观察，恢复到 `EnhancedState.ACTIVE` 并报告正常 |
 | `CLEAR_PROBE` | 观察窗口结束仍不正常 | `IDLE` | 回到增强守护常规监听 |
 | `RECOVERY_WINDOW` | 连续稳定命中达到阈值 | `IDLE` | 退出恢复观察，报告稳定 |
+| `RECOVERY_WINDOW` | 观察超时且回读通信设备仍不匹配耳机 | `IDLE` | 清空通信设备并强制重试一次；约 400ms 后回读复核，失败则上报 `RESTORE_FAILED` |
 | `RECOVERY_WINDOW` | 再次检测到 builtin route | `RECOVERY_WINDOW` | 立即再次恢复并重置稳定计数 |
 | `RECOVERY_WINDOW` | 满足“应保持限制，不应自动归还” | `IDLE` | 进入 held route 状态，但退出轮询 |
 | `RECOVERY_WINDOW` | 路由已稳定，但当前仍由 guard 持有通信控制且无需进入 held route | `RELEASE_PROBE` | 清理本应用占用并观察系统接管后是否再次被劫持 |

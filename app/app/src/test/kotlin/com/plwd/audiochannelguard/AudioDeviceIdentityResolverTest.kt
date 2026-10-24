@@ -8,6 +8,12 @@ import org.junit.Test
 class AudioDeviceIdentityResolverTest {
 
     @Test
+    fun `missing names and addresses do not identify a physical device`() {
+        assertFalse(AudioDeviceIdentityResolver.isSamePhysicalDevice(null, null, null, null))
+        assertFalse(AudioDeviceIdentityResolver.isSamePhysicalDevice("", "", "", ""))
+    }
+
+    @Test
     fun `identity key prefers address when available`() {
         val key = AudioDeviceIdentityResolver.identityKey(
             type = 8,

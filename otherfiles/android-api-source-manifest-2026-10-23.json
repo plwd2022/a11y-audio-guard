@@ -1,0 +1,218 @@
+{
+  "checked_at": "2026-10-23",
+  "scope": "AOSP source snapshots used for targeted verification; files were downloaded to the local temporary cache, not vendored into this repository.",
+  "sources": [
+    {
+      "file": "android-13.0.0_r1_AudioManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/media/java/android/media/AudioManager.java?format=TEXT",
+      "bytes": 359779
+    },
+    {
+      "file": "android-13.0.0_r1_AudioService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/audio/AudioService.java?format=TEXT",
+      "bytes": 520898
+    },
+    {
+      "file": "android-13.0.0_r1_AudioDeviceBroker.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/services/core/java/com/android/server/audio/AudioDeviceBroker.java?format=TEXT",
+      "bytes": 79167
+    },
+    {
+      "file": "android-14.0.0_r1_AudioManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-14.0.0_r1/media/java/android/media/AudioManager.java?format=TEXT",
+      "bytes": 411562
+    },
+    {
+      "file": "android-14.0.0_r1_AudioService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-14.0.0_r1/services/core/java/com/android/server/audio/AudioService.java?format=TEXT",
+      "bytes": 586760
+    },
+    {
+      "file": "android-14.0.0_r1_AudioDeviceBroker.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-14.0.0_r1/services/core/java/com/android/server/audio/AudioDeviceBroker.java?format=TEXT",
+      "bytes": 99828
+    },
+    {
+      "file": "android-15.0.0_r1_AudioManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/media/java/android/media/AudioManager.java?format=TEXT",
+      "bytes": 433725
+    },
+    {
+      "file": "android-15.0.0_r1_AudioService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/services/core/java/com/android/server/audio/AudioService.java?format=TEXT",
+      "bytes": 640056
+    },
+    {
+      "file": "android-15.0.0_r1_AudioDeviceBroker.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/services/core/java/com/android/server/audio/AudioDeviceBroker.java?format=TEXT",
+      "bytes": 123157
+    },
+    {
+      "file": "android-16.0.0_r1_AudioManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/media/java/android/media/AudioManager.java?format=TEXT",
+      "bytes": 442777
+    },
+    {
+      "file": "android-16.0.0_r1_AudioService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/audio/AudioService.java?format=TEXT",
+      "bytes": 692021
+    },
+    {
+      "file": "android-16.0.0_r1_AudioDeviceBroker.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/audio/AudioDeviceBroker.java?format=TEXT",
+      "bytes": 132659
+    },
+    {
+      "file": "main_AudioManager.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/main/media/java/android/media/AudioManager.java?format=TEXT",
+      "bytes": 438461
+    },
+    {
+      "file": "main_AudioService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/main/services/core/java/com/android/server/audio/AudioService.java?format=TEXT",
+      "bytes": 688946
+    },
+    {
+      "file": "main_AudioDeviceBroker.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/main/services/core/java/com/android/server/audio/AudioDeviceBroker.java?format=TEXT",
+      "bytes": 128557
+    },
+    {
+      "file": "BlockingAudioTrack.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/speech/tts/BlockingAudioTrack.java?format=TEXT",
+      "bytes": 13276
+    },
+    {
+      "file": "TextToSpeech.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/speech/tts/TextToSpeech.java?format=TEXT",
+      "bytes": 106956
+    },
+    {
+      "file": "TextToSpeechService.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/speech/tts/TextToSpeechService.java?format=TEXT",
+      "bytes": 61687
+    },
+    {
+      "file": "UtteranceProgressListener.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/speech/tts/UtteranceProgressListener.java?format=TEXT",
+      "bytes": 7598
+    },
+    {
+      "file": "AudioPlaybackConfiguration.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/media/java/android/media/AudioPlaybackConfiguration.java?format=TEXT",
+      "bytes": 38352
+    },
+    {
+      "file": "AudioTrack.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/media/java/android/media/AudioTrack.java?format=TEXT",
+      "bytes": 211031
+    },
+    {
+      "file": "AudioAttributes.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/media/java/android/media/AudioAttributes.java?format=TEXT",
+      "bytes": 78795
+    },
+    {
+      "file": "Manifest.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/res/AndroidManifest.xml?format=TEXT",
+      "bytes": 512709
+    },
+    {
+      "file": "PlaybackActivityMonitor.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/audio/PlaybackActivityMonitor.java?format=TEXT",
+      "bytes": 74908
+    },
+    {
+      "file": "Engine.cpp",
+      "url": "https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r1/services/audiopolicy/enginedefault/src/Engine.cpp?format=TEXT",
+      "bytes": 42260
+    },
+    {
+      "file": "AudioPolicyManager.cpp",
+      "url": "https://android.googlesource.com/platform/frameworks/av/+/android-16.0.0_r1/services/audiopolicy/managerdefault/AudioPolicyManager.cpp?format=TEXT",
+      "bytes": 436390
+    },
+    {
+      "file": "MediaRouter2.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/media/java/android/media/MediaRouter2.java?format=TEXT",
+      "bytes": 161955
+    },
+    {
+      "file": "HfpLegacy.c",
+      "url": "https://android.googlesource.com/platform/hardware/qcom/audio/+/master/hal/audio_extn/hfp.c?format=TEXT",
+      "bytes": 16432
+    },
+    {
+      "file": "BtRemoveParameters.commit",
+      "url": "https://android.googlesource.com/platform/packages/apps/Bluetooth/+/67a02818130239e472e876af1cce6893ab193003?format=TEXT",
+      "bytes": 454
+    },
+    {
+      "file": "TalkBack_FailoverTextToSpeech.java",
+      "url": "https://raw.githubusercontent.com/google/talkback/master/utils/src/main/java/com/google/android/accessibility/utils/output/FailoverTextToSpeech.java",
+      "bytes": 65150
+    },
+    {
+      "file": "TalkBack_SpeechControllerImpl.java",
+      "url": "https://raw.githubusercontent.com/google/talkback/master/utils/src/main/java/com/google/android/accessibility/utils/output/SpeechControllerImpl.java",
+      "bytes": 98411
+    },
+    {
+      "file": "android-13.0.0_r1_ShellManifest.xml",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-13.0.0_r1/packages/Shell/AndroidManifest.xml?format=TEXT",
+      "bytes": 47604
+    },
+    {
+      "file": "android-14.0.0_r1_ShellManifest.xml",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-14.0.0_r1/packages/Shell/AndroidManifest.xml?format=TEXT",
+      "bytes": 56788
+    },
+    {
+      "file": "android-15.0.0_r1_ShellManifest.xml",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-15.0.0_r1/packages/Shell/AndroidManifest.xml?format=TEXT",
+      "bytes": 62500
+    },
+    {
+      "file": "android-16.0.0_r1_ShellManifest.xml",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/packages/Shell/AndroidManifest.xml?format=TEXT",
+      "bytes": 67934
+    },
+    {
+      "file": "AudioCommunicationDeviceTest.java",
+      "url": "https://android.googlesource.com/platform/cts/+/android-16.0.0_r1/tests/tests/media/audio/src/android/media/audio/cts/AudioCommunicationDeviceTest.java?format=TEXT",
+      "bytes": 18612
+    },
+    {
+      "file": "AudioDeviceInventory.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/audio/AudioDeviceInventory.java?format=TEXT",
+      "bytes": 147025
+    },
+    {
+      "file": "SystemMediaRoute2Provider.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/media/SystemMediaRoute2Provider.java?format=TEXT",
+      "bytes": 29367
+    },
+    {
+      "file": "MediaRouter2ServiceImpl.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/media/MediaRouter2ServiceImpl.java?format=TEXT",
+      "bytes": 174304
+    },
+    {
+      "file": "Settings.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/core/java/android/provider/Settings.java?format=TEXT",
+      "bytes": 848594
+    },
+    {
+      "file": "DeviceRouteController.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/media/DeviceRouteController.java?format=TEXT",
+      "bytes": 6301
+    }
+  ],
+  "failed_fetches": [
+    {
+      "file": "AudioPoliciesDeviceRouteController.java",
+      "url": "https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r1/services/core/java/com/android/server/media/AudioPoliciesDeviceRouteController.java?format=TEXT",
+      "error": "HTTP Error 404: Not Found"
+    }
+  ]
+}

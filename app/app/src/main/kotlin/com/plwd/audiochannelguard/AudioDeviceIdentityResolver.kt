@@ -35,6 +35,6 @@ internal object AudioDeviceIdentityResolver {
             return false
         }
 
-        return firstProductName == secondProductName
+        return !firstProductName.isNullOrBlank() && firstProductName == secondProductName
     }
 }

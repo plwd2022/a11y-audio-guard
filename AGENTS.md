@@ -171,7 +171,7 @@ CHANNEL_ID = "audio_guard_channel"
 
 ## Testing
 
-There are **no automated tests** configured in this project.
+Run unit tests with `./gradlew test` from `app/` (JVM resolvers and Robolectric API 31/33 tests under `app/app/src/test/`). Keep `unitTests.isIncludeAndroidResources = true`: without binary resources, Robolectric silently skips modern Android SDK tests. Verify the XML results have zero failures, errors, and skipped tests. Lint: `./gradlew lint`.
 
 For manual testing, use the included `AudioTool.java`:
 
@@ -241,7 +241,7 @@ The file `app/app/proguard-rules.pro` keeps all manifest-declared components:
 ## Important Notes for Agents
 
 1. **Gradle root is `app/`, not repo root** - Always `cd app` before running Gradle commands
-2. **No tests exist** - Do not attempt to run test commands
+2. **Unit tests exist** - Run `./gradlew test` from `app/` after logic changes
 3. **UI is Chinese-only** - Maintain Chinese for all user-facing strings
 4. **Signature verification is mandatory** - The app will not function if the APK is re-signed
 5. **Foreground service requires notification** - Service must call `startForeground()` within 5 seconds

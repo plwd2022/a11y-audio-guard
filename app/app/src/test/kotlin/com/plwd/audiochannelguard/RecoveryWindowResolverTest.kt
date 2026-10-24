@@ -131,6 +131,58 @@ class RecoveryWindowResolverTest {
         assertEquals(0, decision.nextStableHitCount)
     }
 
+    @Test
+    fun `clears then restores on timeout when route still does not match headset`() {
+        val outcome = RecoveryWindowResolver.resolveTimeoutRetry(
+            RecoveryTimeoutRetryInput(
+                hasHeadset = true,
+                hasCommunicationHeadset = true,
+                communicationDeviceMatchesHeadset = false,
+            )
+        )
+
+        assertEquals(RecoveryTimeoutRetryOutcome.CLEAR_THEN_RESTORE, outcome)
+    }
+
+    @Test
+    fun `skips timeout retry when route already matches headset`() {
+        val outcome = RecoveryWindowResolver.resolveTimeoutRetry(
+            RecoveryTimeoutRetryInput(
+                hasHeadset = true,
+                hasCommunicationHeadset = true,
+                communicationDeviceMatchesHeadset = true,
+            )
+        )
+
+        assertEquals(RecoveryTimeoutRetryOutcome.SKIP, outcome)
+    }
+
+    @Test
+    fun `skips timeout retry without headset`() {
+        val outcome = RecoveryWindowResolver.resolveTimeoutRetry(
+            RecoveryTimeoutRetryInput(
+                hasHeadset = false,
+                hasCommunicationHeadset = false,
+                communicationDeviceMatchesHeadset = false,
+            )
+        )
+
+        assertEquals(RecoveryTimeoutRetryOutcome.SKIP, outcome)
+    }
+
+    @Test
+    fun `skips timeout retry without available communication headset`() {
+        val outcome = RecoveryWindowResolver.resolveTimeoutRetry(
+            RecoveryTimeoutRetryInput(
+                hasHeadset = true,
+                hasCommunicationHeadset = false,
+                communicationDeviceMatchesHeadset = false,
+            )
+        )
+
+        assertEquals(RecoveryTimeoutRetryOutcome.SKIP, outcome)
+    }
+
     private fun input(
         timedOut: Boolean = false,
         hasHeadset: Boolean = true,

@@ -41,10 +41,20 @@ class ServiceGuard(context: Context, params: WorkerParameters) : Worker(context,
 
     override fun doWork(): Result {
         if (AudioGuardApp.isGuardEnabled(applicationContext) && !AudioGuardService.isRunning()) {
-            return if (AudioGuardService.start(applicationContext)) {
-                Result.success()
-            } else {
-                Result.retry()
+            return when (AudioGuardService.startForRecovery(applicationContext)) {
+                GuardServiceStartResult.STARTED -> Result.success()
+                GuardServiceStartResult.BACKGROUND_RESTRICTED -> {
+                    AudioGuardService.showRestartRequiredNotification(applicationContext)
+                    Result.success()
+                }
+                GuardServiceStartResult.FAILED -> {
+                    if (runAttemptCount < 3) {
+                        Result.retry()
+                    } else {
+                        AudioGuardService.showRestartRequiredNotification(applicationContext)
+                        Result.failure()
+                    }
+                }
             }
         }
         return Result.success()
